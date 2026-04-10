@@ -1691,14 +1691,14 @@ run_statistical_model <- function(data_summary, config, response_variable) {
         Total_Expansion_CI_Upper = CI_Upper_95 * total_time_duration,
         
         # 2. Time to expand exactly 1 CAG (only if expanding)
-        Time_for_1_CAG = dplyr::case_when(
+        Rate_per_CAG = dplyr::case_when(
           Expansion_Rate > 0 ~ 1 / Expansion_Rate,
           TRUE ~ NA_real_  # Returns NA if the rate is 0 or negative (contracting)
         ),
         
         # 3. Rate Change compared to WT
-        Rate_vs_WT_Difference = Expansion_Rate - wt_rate,
-        Rate_vs_WT_FoldChange = Expansion_Rate / wt_rate
+        Rate_Difference_vs_WT = Expansion_Rate - wt_rate,
+        Rate_FoldChange_vs_WT = Expansion_Rate / wt_rate
       ) %>%
       # Round the new numeric columns to 4 decimal places for clean viewing
       dplyr::mutate(dplyr::across(where(is.numeric), ~ round(.x, 4)))

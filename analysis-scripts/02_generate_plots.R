@@ -2513,15 +2513,15 @@ for (current_resp_var in response_vars) {
     logr::log_print(paste("...generating Volcano plot for", current_resp_var))
     
     volc_data <- model_outputs$results_tables$Rate_Comparisons %>%
-      dplyr::filter(!is.na(P_Value) & !is.na(Rate_Difference)) %>%
+      dplyr::filter(!is.na(p_value_adj) & !is.na(Rate_Difference)) %>%
       dplyr::mutate(
-        P_Value         = suppressWarnings(as.numeric(P_Value)),
+        p_value_adj         = suppressWarnings(as.numeric(p_value_adj)),
         Rate_Difference = suppressWarnings(as.numeric(Rate_Difference)),
-        logP            = -log10(P_Value),
+        logP            = -log10(p_value_adj),
         effect_thresh   = 0.01,
         Sig_Label       = dplyr::case_when(
-          P_Value < 0.05 & Rate_Difference >  effect_thresh ~ "Significant Increase",
-          P_Value < 0.05 & Rate_Difference < -effect_thresh ~ "Significant Decrease",
+          p_value_adj < 0.05 & Rate_Difference >  effect_thresh ~ "Significant Increase",
+          p_value_adj < 0.05 & Rate_Difference < -effect_thresh ~ "Significant Decrease",
           TRUE ~ "Not Significant"
         ),
         # FIX: Directly target the raw 'contrast' column and swap the spaced-hyphen
@@ -2562,7 +2562,7 @@ for (current_resp_var in response_vars) {
           title    = paste("Rate Comparison Volcano Plot:", y_axis_label),
           subtitle = "Effect size (x) vs. statistical significance (y). Dashed lines = thresholds.",
           x        = "Difference in Expansion Rate",
-          y        = expression(-log[10](p-value)),
+          y        =  expression(-log[10]("adj. p-value")),
           color    = "Direction"
         ) +
         theme_publication(base_size = 14) +
@@ -2677,7 +2677,23 @@ format_p_val <- function(p) {
 }
 
 # Provide a safety net of every possible name statistical packages use for p-values
-pval_cols <- c("P_Value", "p.value", "p-value", "Pr(>F)", "Pr(>|t|)", "Pr(>Chisq)")
+pval_cols <- c("P_Value", "p.value", "p-value", "Pr(>F)", "Pr(>|t|)", "Pr(>Chisq)", "p_value")
+pval_adj_cols <- c(
+  # Standard base R & broom naming
+  "p.adj", "p_adj", "padj", 
+  "p.adjusted", "p_adjusted", 
+  
+  # Emmeans & Custom explicit naming
+  "p.value.adj", "p_value_adj", "P_Value_Adj",
+  "p_value_tukey", "p_value_bonferroni",
+  
+  # Bioinformatics packages (limma, DESeq2, edgeR)
+  "adj.P.Val", "adj.p.value", "adj_p_value",
+  
+  # False Discovery Rate / Q-value equivalents
+  "FDR", "fdr", "q.value", "qvalue", "q_value"
+)
+
 
 for (current_resp_var in response_vars) {
   model_outputs <- all_model_outputs[[current_resp_var]]
@@ -2699,7 +2715,7 @@ for (current_resp_var in response_vars) {
       dplyr::mutate(Parameter = ifelse(Parameter == "(Intercept)", baseline_string, Parameter)) %>%
       dplyr::mutate(Parameter = stringr::str_replace_all(Parameter, ":", " × ")) %>%
       # FIX: Crash-proof p-value formatting
-      dplyr::mutate(dplyr::across(dplyr::any_of(pval_cols), ~ format_p_val(as.numeric(.))))
+      dplyr::mutate(dplyr::across(dplyr::any_of(c(pval_cols, pval_adj_cols)), ~ format_p_val(as.numeric(.))))
     
     # Standardize the column name back to P_Value for Excel
     names(mc)[names(mc) %in% pval_cols] <- "P_Value"
@@ -2739,6 +2755,7 @@ for (current_resp_var in response_vars) {
       dplyr::mutate(dplyr::across(dplyr::any_of(pval_cols), ~ format_p_val(as.numeric(.))))
     
     names(rc)[names(rc) %in% pval_cols] <- "P_Value"
+    names(rc)[names(rc) %in% pval_adj_cols] <- "Adj_P_Value"
     model_outputs$results_tables$Rate_Comparisons <- rc
   }
   
