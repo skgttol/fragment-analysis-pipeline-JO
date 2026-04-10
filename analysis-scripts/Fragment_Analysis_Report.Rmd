@@ -1,39 +1,26 @@
 ---
-title: "Advanced Fragment Analysis Report"
+title: "Advanced Fragment Analysis & Instability Report"
 author: "Automated Pipeline"
-date: "`r Sys.Date()`"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
 output: 
   html_document:
     theme: flatly
+    highlight: tango
     toc: true
     toc_float: true
+    toc_depth: 3
     code_folding: hide
     self_contained: true
 ---
 
 ```{r setup, include=FALSE}
 # ========================================================================= #
-# 1. REPORT CONFIGURATION (Your Control Panel)
-# ========================================================================= #
-# Specify which variables to include. Leave as NULL to include everything.
-vars_to_include <- c("mode_change", "instability_index_change") 
-
-# Toggle which plot types you want generated in the HTML:
-show_averaged_trend  <- TRUE
-show_faceted_slopes  <- TRUE
-show_waterfall       <- TRUE
-show_raincloud       <- TRUE
-
-# Toggle whether to print the raw statistical tables:
-show_stat_tables     <- TRUE
-
-# ========================================================================= #
-# 2. ENVIRONMENT PREP
+# 1. REPORT CONFIGURATION & ENVIRONMENT PREP
 # ========================================================================= #
 # Note: config, modeling_data, all_model_outputs, and plot_database are 
 # automatically passed in by Script 06. No need to load .RData here!
 
-knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.width = 12, fig.height = 8)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.width = 10, fig.height = 7)
 
 library(tidyverse)
 library(patchwork)
@@ -43,7 +30,16 @@ library(plotly)
 library(DT)
 library(htmltools)
 
-# 1. Build the all_plots database inside the report
+# Specify which variables to include. Leave as NULL to include everything.
+vars_to_include <- c("mode_change", "instability_index_change") 
+
+# Toggle which plot types you want generated in the HTML:
+show_averaged_trend  <- TRUE
+show_faceted_slopes  <- TRUE
+show_waterfall       <- TRUE
+show_stat_tables     <- TRUE
+
+# Build the all_plots database for easy access
 all_plots <- list(descriptive = list(), modeling = list(), qc = list(), exploratory = list())
 
 if (exists("plot_database")) {
@@ -54,143 +50,187 @@ if (exists("plot_database")) {
   all_plots$exploratory <- plot_database[grep("^p_cross_corr", names_db)]
 }
 
-# 2. Filter variables based on your control panel
+# Pull in loose exploratory plots (PCA) from the environment if they exist
+for (obj_name in c("p_biplot", "p_scree", "p_loadings_bars", "p_corr_ggpairs_color")) {
+  if (exists(obj_name)) {
+    all_plots$exploratory[[obj_name]] <- get(obj_name)
+  }
+}
+
+# Filter variables based on your control panel
 if (!is.null(vars_to_include)) {
   report_vars <- intersect(response_vars, vars_to_include)
 } else {
   report_vars <- response_vars
 }
 
-# Helper function to safely render plotly inside a loop
+# Helper function to safely render plotly without breaking non-compatible plots
 safe_plotly <- function(p) {
+  if (is.null(p)) return(htmltools::HTML("<em>Plot not available.</em><br><br>"))
   if (inherits(p, "ggplot")) {
-    return(plotly::ggplotly(p) %>% plotly::layout(margin = list(b = 50)))
+    return(plotly::ggplotly(p) %>% plotly::layout(margin = list(b = 40)))
   }
   return(p)
 }
 ```
 
-# Experiment Summary
-**Experiment Style:** `r stringr::str_to_title(config$key_variables$experiment_style)`  
-**Primary Group (Genotype):** `r config$key_variables$primary_group_var`  
-**Output Directory:** `r output_dir`  
+## Experiment Summary
+* **Experiment Style:** `r stringr::str_to_title(config$key_variables$experiment_style)`  
+* **Primary Group (Genotype):** `r config$key_variables$primary_group_var`  
+* **Output Directory:** `r output_dir`  
 
 ***
 
+# Results by Variable {.tabset .tabset-pills}
+
 ```{r generate_dynamic_ui, results='asis'}
 # ========================================================================= #
-# 3. DYNAMIC REPORT GENERATOR
+# 2. DYNAMIC REPORT GENERATOR (Nested Tabs)
 # ========================================================================= #
-# We collect all HTML tags in a list, then print them at the end.
-# This is required to make interactive widgets work inside a loop.
 out_tags <- list()
 
 for (var in report_vars) {
   short_var <- response_shortnames[[var]] %||% var
   friendly_name <- response_labels[[var]] %||% stringr::str_to_title(var)
   
-  out_tags <- append(out_tags, list(htmltools::HTML(paste0("\n\n## ", friendly_name, " {.tabset .tabset-pills}\n\n"))))
+  # Top-Level Tab for the Variable
+  out_tags <- append(out_tags, list(htmltools::HTML(paste0("\n\n## ", friendly_name, " {.tabset}\n\n"))))
   
-  # --- TAB 1: Modeled Trends ---
-  if (show_averaged_trend) {
-    out_tags <- append(out_tags, list(htmltools::HTML("\n\n### Overall Trends\n\nShows the modeled expansion trajectory over time, averaged across batches.<br><br>")))
-    
-    plot_name <- paste0("p_overall_2a_", short_var)
-    if (is.null(all_plots$modeling[[plot_name]])) plot_name <- paste0("p_preds_", short_var)
-    
-    if (!is.null(all_plots$modeling[[plot_name]])) {
-      # Make it interactive!
-      p_int <- safe_plotly(all_plots$modeling[[plot_name]])
-      out_tags <- append(out_tags, list(p_int, htmltools::HTML("\n\n<br>\n\n")))
-    } else {
-      out_tags <- append(out_tags, list(htmltools::HTML("*Plot not found in database.*\n\n")))
-    }
-  }
+  # -------------------------------------------------------------------------
+  # SUB-TAB 1: Modeled Trends
+  # -------------------------------------------------------------------------
+  out_tags <- append(out_tags, list(htmltools::HTML("\n\n### Trends & Trajectories\n\n**Overall Modeled Trend**<br>Shows the modeled expansion trajectory over time, averaged across batches.<br><br>")))
   
-  # --- TAB 2: Faceted Slopes ---
-  if (show_faceted_slopes) {
-    out_tags <- append(out_tags, list(htmltools::HTML("\n\n### Expansion Rates (Slopes)\n\nShows the explicit rate of change, faceted by genotype and batch.<br><br>")))
-    
-    plot_name <- paste0("p_slopes_faceted_", short_var)
-    if (is.null(all_plots$modeling[[plot_name]])) plot_name <- paste0("p_slopes_", short_var)
-    
-    if (!is.null(all_plots$modeling[[plot_name]])) {
-      # Make it interactive!
-      p_int <- safe_plotly(all_plots$modeling[[plot_name]])
-      out_tags <- append(out_tags, list(p_int, htmltools::HTML("\n\n<br>\n\n")))
-    } else {
-      out_tags <- append(out_tags, list(htmltools::HTML("*Plot not found in database.*\n\n")))
-    }
-  }
+  plot_trend <- paste0("p_overall_2a_", short_var)
+  if (is.null(all_plots$modeling[[plot_trend]])) plot_trend <- paste0("p_preds_", short_var)
+  out_tags <- append(out_tags, list(safe_plotly(all_plots$modeling[[plot_trend]]), htmltools::HTML("\n\n<br><br>\n\n")))
   
-  # --- TAB 3: Waterfall Plot ---
-  if (show_waterfall) {
-    out_tags <- append(out_tags, list(htmltools::HTML("\n\n### Clonal Waterfall\n\nIndividual responder profiles ranked by expansion rate.<br><br>")))
-    plot_name <- paste0("p_waterfall_", short_var)
-    
-    if (!is.null(all_plots$modeling[[plot_name]])) {
-      # Make it interactive!
-      p_int <- safe_plotly(all_plots$modeling[[plot_name]])
-      out_tags <- append(out_tags, list(p_int, htmltools::HTML("\n\n<br>\n\n")))
-    } else {
-      out_tags <- append(out_tags, list(htmltools::HTML("*Waterfall plot not found (is clone modeling enabled?).*\n\n")))
-    }
+  plot_raincloud <- paste0("p_raincloud_", short_var)
+  if (!is.null(all_plots$descriptive[[plot_raincloud]])) {
+    out_tags <- append(out_tags, list(htmltools::HTML("**Distribution Shift (Raincloud)**<br>Shows how the population distribution changes across timepoints.<br><br>")))
+    out_tags <- append(out_tags, list(safe_plotly(all_plots$descriptive[[plot_raincloud]]), htmltools::HTML("\n\n<br><br>\n\n")))
   }
 
-  # --- TAB 4: Statistical Tables ---
+  # -------------------------------------------------------------------------
+  # SUB-TAB 2: Expansion Rates
+  # -------------------------------------------------------------------------
+  if (show_faceted_slopes) {
+    out_tags <- append(out_tags, list(htmltools::HTML("\n\n### Expansion Rates\n\n**Calculated Expansion Slopes**<br>Shows the explicit rate of change, faceted by genotype and batch.<br><br>")))
+    
+    plot_slopes <- paste0("p_slopes_faceted_", short_var)
+    if (is.null(all_plots$modeling[[plot_slopes]])) plot_slopes <- paste0("p_slopes_", short_var)
+    out_tags <- append(out_tags, list(safe_plotly(all_plots$modeling[[plot_slopes]]), htmltools::HTML("\n\n<br><br>\n\n")))
+  }
+  
+  # -------------------------------------------------------------------------
+  # SUB-TAB 3: Responder Waterfall
+  # -------------------------------------------------------------------------
+  if (show_waterfall) {
+    out_tags <- append(out_tags, list(htmltools::HTML("\n\n### Clonal Waterfall\n\n**Individual Responder Profiles**<br>Biological replicates ranked by their True BLUP expansion rate.<br><br>")))
+    
+    plot_wf <- paste0("p_waterfall_", short_var)
+    out_tags <- append(out_tags, list(safe_plotly(all_plots$modeling[[plot_wf]]), htmltools::HTML("\n\n<br><br>\n\n")))
+  }
+
+  # -------------------------------------------------------------------------
+  # SUB-TAB 4: Quality Control & Diagnostics
+  # -------------------------------------------------------------------------
+  out_tags <- append(out_tags, list(htmltools::HTML("\n\n### Quality Control\n\n")))
+  
+  plot_volcano <- paste0("p_volcano_", short_var)
+  if (!is.null(all_plots$qc[[plot_volcano]])) {
+    out_tags <- append(out_tags, list(htmltools::HTML("**Volcano Plot (Rate Comparisons)**<br>Effect size vs statistical significance for group comparisons.<br><br>")))
+    out_tags <- append(out_tags, list(safe_plotly(all_plots$qc[[plot_volcano]]), htmltools::HTML("\n\n<br><hr><br>\n\n")))
+  }
+  
+  plot_qc_slope <- paste0("p_qc_slope_compare_", short_var)
+  if (!is.null(all_plots$qc[[plot_qc_slope]])) {
+    out_tags <- append(out_tags, list(htmltools::HTML("**Calculation Method QC**<br>Validates the formal LMER model against a naive simple trendline.<br><br>")))
+    out_tags <- append(out_tags, list(safe_plotly(all_plots$qc[[plot_qc_slope]]), htmltools::HTML("\n\n<br><hr><br>\n\n")))
+  }
+  
+  plot_qc_shift <- paste0("p_qc_vis_shift_", short_var)
+  if (!is.null(all_plots$qc[[plot_qc_shift]])) {
+    out_tags <- append(out_tags, list(htmltools::HTML("**Model Adjustment Shift**<br>Visualizes how much the LMER adjusted the raw trajectories.<br><br>")))
+    out_tags <- append(out_tags, list(safe_plotly(all_plots$qc[[plot_qc_shift]]), htmltools::HTML("\n\n<br><br>\n\n")))
+  }
+
+  # -------------------------------------------------------------------------
+  # SUB-TAB 5: Statistical Tables
+  # -------------------------------------------------------------------------
   if (show_stat_tables) {
     out_tags <- append(out_tags, list(htmltools::HTML("\n\n### Statistical Tables\n\n")))
     
     model_outputs <- all_model_outputs[[var]]
     if (!is.null(model_outputs) && !is.null(model_outputs$results_tables)) {
       
-      # 1. Print Group Rates (Interactive)
       if (!is.null(model_outputs$results_tables$Group_Expansion_Rates)) {
         out_tags <- append(out_tags, list(htmltools::HTML("**Calculated Group Rates**<br>")))
-        
         dt_tbl <- DT::datatable(
-          model_outputs$results_tables$Group_Expansion_Rates %>% mutate(across(where(is.numeric), ~round(., 4))),
-          options = list(pageLength = 5, scrollX = TRUE),
-          rownames = FALSE
+          model_outputs$results_tables$Group_Expansion_Rates %>% mutate(across(where(is.numeric), ~round(., 5))),
+          options = list(pageLength = 5, scrollX = TRUE), rownames = FALSE
         )
         out_tags <- append(out_tags, list(dt_tbl, htmltools::HTML("\n\n<br><br>\n\n")))
       }
       
-      # 2. Print Rate Comparisons (Interactive)
-      if (!is.null(model_outputs$results_tables$Rate_Comparisons)) {
-        out_tags <- append(out_tags, list(htmltools::HTML("**Pairwise Rate Comparisons (Šidák Adjusted)**<br>")))
-        
-        dt_tbl_comp <- DT::datatable(
-          model_outputs$results_tables$Rate_Comparisons %>% mutate(across(where(is.numeric), ~round(., 4))),
-          options = list(pageLength = 5, scrollX = TRUE),
-          rownames = FALSE
+      if (!is.null(model_outputs$results_tables$Model_Coefficients)) {
+        out_tags <- append(out_tags, list(htmltools::HTML("**Model Coefficients**<br>")))
+        dt_tbl_c <- DT::datatable(
+          model_outputs$results_tables$Model_Coefficients %>% mutate(across(where(is.numeric), ~round(., 5))),
+          options = list(pageLength = 5, scrollX = TRUE), rownames = FALSE
         )
-        out_tags <- append(out_tags, list(dt_tbl_comp, htmltools::HTML("\n\n<br><br>\n\n")))
+        out_tags <- append(out_tags, list(dt_tbl_c, htmltools::HTML("\n\n<br><br>\n\n")))
       }
-      
     } else {
-      out_tags <- append(out_tags, list(htmltools::HTML("*No statistical tables found for this variable.*\n\n")))
+      out_tags <- append(out_tags, list(htmltools::HTML("*No statistical tables found.*<br>")))
     }
   }
 }
 
-# Print everything to the document
+# Print the dynamically generated UI
 htmltools::tagList(out_tags)
 ```
 
-```{r cross_correlation, results='asis', fig.width=10, fig.height=7}
-# ========================================================================= #
-# 4. CROSS-METRIC ANALYSIS
-# ========================================================================= #
+# Combined Analysis {.tabset .tabset-pills}
 
+## Cross-Metric Correlation
+This scatter plot compares the expansion rate (True BLUP Slope) of the Modal CAG length against the expansion rate of the Instability Index for each biological replicate. A strong positive correlation indicates that the clones expanding the fastest are also the ones becoming the most genetically unstable.
+
+```{r cross-corr, out.width="100%"}
 if (!is.null(all_plots$exploratory$p_cross_corr_mode_vs_iic)) {
-  cat("\n\n# Cross-Metric Analysis\n\n")
-  cat("## Mode vs. Instability Correlation\n\n")
-  
-  cat("This scatter plot compares the expansion rate (True BLUP Slope) of the Modal CAG length against the expansion rate of the Instability Index. Hover over points to identify specific biological replicates.\n\n")
-  
-  # Make cross-correlation interactive
-  p_int <- plotly::ggplotly(all_plots$exploratory$p_cross_corr_mode_vs_iic, tooltip = c("x", "y", "fill"))
-  print(htmltools::tagList(p_int))
+  safe_plotly(all_plots$exploratory$p_cross_corr_mode_vs_iic)
+} else {
+  htmltools::HTML("<em>Cross-correlation plot not generated.</em>")
+}
+```
+
+## Principal Component Analysis (PCA)
+PCA reduces the dimensionality of the data to help identify overarching patterns, clusters, or batch effects across all measured variables simultaneously.
+
+```{r pca-plots, out.width="100%"}
+if (!is.null(all_plots$exploratory$p_biplot)) {
+  htmltools::HTML("<h3>PCA Biplot</h3><p>Points represent individual replicates. Arrows represent the variables driving the separation.</p>")
+  safe_plotly(all_plots$exploratory$p_biplot)
+} else {
+  htmltools::HTML("<em>PCA Biplot not available.</em>")
+}
+
+htmltools::HTML("<br><hr><br>")
+
+if (!is.null(all_plots$exploratory$p_loadings_bars)) {
+  htmltools::HTML("<h3>PCA Loadings</h3><p>Shows the contribution strength of each variable to the principal components.</p>")
+  safe_plotly(all_plots$exploratory$p_loadings_bars)
+}
+```
+
+## Correlation Matrix
+Overview of the relationships between all measured variables across the dataset.
+
+```{r corr-matrix, out.width="100%", fig.width=14, fig.height=14}
+if (!is.null(all_plots$exploratory$p_corr_ggpairs_color)) {
+  # ggpairs objects do not always convert cleanly to plotly, so we print the static image
+  print(all_plots$exploratory$p_corr_ggpairs_color)
+} else {
+  htmltools::HTML("<em>Correlation matrix not available.</em>")
 }
 ```
