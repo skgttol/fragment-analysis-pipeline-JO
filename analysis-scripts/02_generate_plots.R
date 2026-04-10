@@ -1964,7 +1964,8 @@ for (current_resp_var in response_vars) {
     }
   }
   
-  # FIX 2: Add explicit 'group' aesthetic to force dodging
+  # --- PLOT 5B: AVERAGED (Aggregated across Batches) ---
+  
   p_slopes_avg <- ggplot(bar_data_avg, aes(
     x = !!sym(plot_x_var), 
     y = Mean_Rate, 
@@ -1972,42 +1973,39 @@ for (current_resp_var in response_vars) {
     group = !!sym(plot_fill_var) 
   )) +
     geom_hline(yintercept = 0, color = "black", linewidth = 0.5) +
-    # Use 0.8 for the width to create a clean gap between the bars
     geom_col(width = 0.75, color = "black", alpha = 0.8, position = position_dodge(width = 0.85))
   
   if(nrow(dot_data) > 0) {
     p_slopes_avg <- p_slopes_avg + 
-      # FIX 3: Use position_jitterdodge so the dots perfectly follow the dodged bars!
       geom_point(data = dot_data, aes(y = Individual_Slope, x = !!sym(plot_x_var), fill = !!sym(plot_fill_var)), 
                  inherit.aes = FALSE, shape = 21, color = "black", alpha = 0.7, size = 2,
                  position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.85))
   }
   
   p_slopes_avg <- p_slopes_avg +
-    geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.25, position = position_dodge(width = 0.85)) +
-    
-    # --- NEW: ADD SIGNIFICANCE BRACKETS ---
-    if (nrow(bracket_data) > 0) {
-      p_slopes_avg <- p_slopes_avg +
-        ggpubr::stat_pvalue_manual(
-          data = bracket_data, 
-          label = "stars",
-          y.position = "y.position",
-          bracket.size = 0.6,
-          label.size = 6,
-          tip.length = 0.02 # Keeps the downward "legs" of the brackets subtle
-        )
-    }
+    geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.25, position = position_dodge(width = 0.85))
   
-    geom_text(aes(y = Upper + star_padding, label = Sig_Label), 
-              position = position_dodge(width = 0.85), 
-              size = 6, fontface = "bold", vjust = 0, color = "black") +
+  # --- NEW: ADD SIGNIFICANCE BRACKETS ---
+  if (nrow(bracket_data) > 0) {
+    p_slopes_avg <- p_slopes_avg +
+      ggpubr::stat_pvalue_manual(
+        data = bracket_data, 
+        label = "stars",
+        y.position = "y.position",
+        bracket.size = 0.6,
+        label.size = 6,
+        tip.length = 0.02
+      )
+  }
+  # --------------------------------------
+  
+  p_slopes_avg <- p_slopes_avg +
     labs(title = paste("Averaged Expansion Rates:", y_axis_label),
-         subtitle = "Aggregated group rates. Error bars show 95% Confidence Intervals.Stars indicate LMER significance vs WT.",
+         subtitle = "Aggregated group rates. Error bars show 95% CIs. Brackets show Tukey-adjusted LMER significance.",
          y = paste0("Mean Rate (Slope per ", stringr::str_to_title(config$key_variables$time_variable), ")"),
          x = stringr::str_to_title(color_label)) +
-    theme_publication(base_size = 14) + theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.x = element_blank(), legend.position = "none")  
-  # --- 5. Apply Palettes and Save ---
+    theme_publication(base_size = 14) + 
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.x = element_blank(), legend.position = "none")  # --- 5. Apply Palettes and Save ---
   plot_list <- list(faceted = p_slopes_faceted, averaged = p_slopes_avg)
   
   for(type in names(plot_list)) {
