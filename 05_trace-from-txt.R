@@ -14,9 +14,14 @@ if (any(installed_packages == FALSE)) {
 }
 invisible(lapply(packages, library, character.only = TRUE))
 
-func_path <- "C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R"
-if (!file.exists(func_path)) stop("CRITICAL ERROR: 'functions.R' not found.")
-source(func_path)
+if (!file.exists(here::here("functions.R"))) {
+  stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
+}
+source(here::here("functions.R"))
+
+# func_path <- "C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R"
+# if (!file.exists(func_path)) stop("CRITICAL ERROR: 'functions.R' not found.")
+# source(func_path)
 
 config <- yaml::read_yaml(here::here("config.yml"))
 
