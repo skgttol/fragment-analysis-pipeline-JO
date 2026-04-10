@@ -46,15 +46,15 @@ invisible(lapply(packages, library, character.only = TRUE))
 
 ## 0B. Load Functions ----
 #-------------------------#
-# if (!file.exists(here::here("functions.R"))) {
-#   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
-# }
-# source(here::here("functions.R"))
-
-if (!file.exists("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")) {
+if (!file.exists(here::here("functions.R"))) {
   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
 }
-source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
+source(here::here("functions.R"))
+
+# if (!file.exists("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")) {
+#   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
+# }
+# source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
 
 ## 0C. Load Configuration and Find Latest Data ----
 #--------------------------------------------------#
@@ -1830,11 +1830,13 @@ for (current_resp_var in response_vars) {
     plot_fill_var  <- label_pub
     plot_facet_var <- label_pub                    # Facet by Genotype
     batch_var      <- safe_batch_var               # Safe Fallback Variable
+    color_label    <- cfg_vars$secondary_group_var
   } else {
     plot_x_var     <- label_pub                    # Genotype
     plot_fill_var  <- label_pub
     plot_facet_var <- NULL
     batch_var      <- safe_batch_var
+    color_label    <- primary_var
   }
   
   # --- 2. Prepare Data Layers ---
@@ -1883,7 +1885,7 @@ for (current_resp_var in response_vars) {
     labs(title = paste("Faceted Expansion Rates:", y_axis_label),
          subtitle = "Showing modeled individual rates.",
          y = paste0("Rate (Slope per ", stringr::str_to_title(config$key_variables$time_variable), ")"),
-         x = stringr::str_to_title(plot_x_var)) +
+         x = stringr::str_to_title(color_var)) +
     theme_publication(base_size = 14) + theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.x = element_blank(), legend.position = "none")
   
   # Apply facets safely
@@ -1934,7 +1936,7 @@ for (current_resp_var in response_vars) {
     labs(title = paste("Averaged Expansion Rates:", y_axis_label),
          subtitle = "Aggregated group rates. Error bars show 95% Confidence Intervals.",
          y = paste0("Mean Rate (Slope per ", stringr::str_to_title(config$key_variables$time_variable), ")"),
-         x = stringr::str_to_title(plot_x_var)) +
+         x = stringr::str_to_title(color_label)) +
     theme_publication(base_size = 14) + theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.x = element_blank(), legend.position = "none")  
   # --- 5. Apply Palettes and Save ---
   plot_list <- list(faceted = p_slopes_faceted, averaged = p_slopes_avg)
@@ -2145,11 +2147,13 @@ for (current_resp_var in response_vars) {
       plot_fill_var <- label_pub                    
       grouping_cols <- c(primary_var, plot_x_var)
       methods_to_run <- c("genotype_matched", "global_absolute")
+      color_label <- cfg_vars$secondary_group_var
     } else {
       plot_x_var    <- label_pub
       plot_fill_var <- label_pub
       grouping_cols <- c(primary_var)
       methods_to_run <- c("clone_baseline")
+      color_label <- primary_var
     }
     
     # Clean the incoming data
@@ -2246,11 +2250,10 @@ for (current_resp_var in response_vars) {
             title = paste("Relative Rate of Change in", y_axis_label), 
             subtitle = sub_text, 
             y = "Rate Fold Change (Ratio)", 
-            x = stringr::str_to_title(plot_x_var), 
-            fill = "Genotype"
+            x = stringr::str_to_title(color_label)
           ) + 
           theme_publication(base_size = 14) + 
-          theme(axis.text.x = element_text(angle = 45, hjust = 1))
+          theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
         
         p_fold_change <- apply_smart_palette(p_fold_change, plot_fill_var)
         
