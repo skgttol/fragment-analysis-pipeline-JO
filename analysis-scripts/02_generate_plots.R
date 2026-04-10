@@ -98,6 +98,7 @@ if (!file.exists(rdata_path)) {
 # 1. Load the saved environment from Script 01 FIRST.
 load(rdata_path)
 print(paste("Data loaded successfully from:", rdata_path))
+
 # This loads all data, config, output_dir, palettes, etc.
 source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
 config <- yaml::read_yaml(here::here("config.yml"))
@@ -1912,6 +1913,57 @@ for (current_resp_var in response_vars) {
     dot_data <- dot_data %>% dplyr::mutate(!!sym(plot_x_var) := as.factor(!!sym(plot_x_var)))
   }
   
+  # --- NEW: Extract ALL LMER Significance Brackets ---
+  bracket_data <- data.frame()
+  
+  if (!is.null(model_outputs$results_tables$Rate_Comparisons)) {
+    comps <- model_outputs$results_tables$Rate_Comparisons
+    
+    # UPDATE 1: Check for the new column name
+    if ("p_value_adj" %in% names(comps)) {
+      
+      bracket_data <- comps %>%
+        # 1. Split the 'contrast' column (e.g., "WT - S126D") into two targets
+        dplyr::mutate(
+          group1 = trimws(sapply(strsplit(as.character(contrast), " - "), `[`, 1)),
+          group2 = trimws(sapply(strsplit(as.character(contrast), " - "), `[`, 2))
+        ) %>%
+        # UPDATE 2: Rename from the new column name
+        dplyr::rename(p.adj = p_value_adj) %>%
+        # 2. Map the adjusted p-value to stars
+        dplyr::mutate(
+          stars = dplyr::case_when(
+            p.adj <= 0.001 ~ "***",
+            p.adj <= 0.01  ~ "**",
+            p.adj <= 0.05  ~ "*",
+            TRUE ~ "ns"
+          )
+        ) %>%
+        # 3. Filter out "ns" to prevent drawing a messy web of non-significant brackets
+        dplyr::filter(stars != "ns")
+      
+      # 4. Safety Check: Translate original names to the renamed labels on the plot X-axis
+      if (exists("label_lookup") && nrow(bracket_data) > 0) {
+        translate_dict <- setNames(as.character(label_lookup[[label_pub]]), as.character(label_lookup[[primary_var]]))
+        
+        bracket_data <- bracket_data %>%
+          dplyr::mutate(
+            group1 = ifelse(!is.na(translate_dict[group1]), translate_dict[group1], group1),
+            group2 = ifelse(!is.na(translate_dict[group2]), translate_dict[group2], group2)
+          )
+      }
+      
+      # 5. Calculate staggering Y positions so the brackets stack cleanly and don't overlap
+      if(nrow(bracket_data) > 0) {
+        y_max_limit <- max(bar_data_avg$Upper, na.rm = TRUE)
+        step_increase <- y_max_limit * 0.15 # Spacing between stacked brackets
+        
+        bracket_data <- bracket_data %>%
+          dplyr::mutate(y.position = y_max_limit + (dplyr::row_number() * step_increase))
+      }
+    }
+  }
+  
   # FIX 2: Add explicit 'group' aesthetic to force dodging
   p_slopes_avg <- ggplot(bar_data_avg, aes(
     x = !!sym(plot_x_var), 
@@ -1933,8 +1985,25 @@ for (current_resp_var in response_vars) {
   
   p_slopes_avg <- p_slopes_avg +
     geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.25, position = position_dodge(width = 0.85)) +
+    
+    # --- NEW: ADD SIGNIFICANCE BRACKETS ---
+    if (nrow(bracket_data) > 0) {
+      p_slopes_avg <- p_slopes_avg +
+        ggpubr::stat_pvalue_manual(
+          data = bracket_data, 
+          label = "stars",
+          y.position = "y.position",
+          bracket.size = 0.6,
+          label.size = 6,
+          tip.length = 0.02 # Keeps the downward "legs" of the brackets subtle
+        )
+    }
+  
+    geom_text(aes(y = Upper + star_padding, label = Sig_Label), 
+              position = position_dodge(width = 0.85), 
+              size = 6, fontface = "bold", vjust = 0, color = "black") +
     labs(title = paste("Averaged Expansion Rates:", y_axis_label),
-         subtitle = "Aggregated group rates. Error bars show 95% Confidence Intervals.",
+         subtitle = "Aggregated group rates. Error bars show 95% Confidence Intervals.Stars indicate LMER significance vs WT.",
          y = paste0("Mean Rate (Slope per ", stringr::str_to_title(config$key_variables$time_variable), ")"),
          x = stringr::str_to_title(color_label)) +
     theme_publication(base_size = 14) + theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.title.x = element_blank(), legend.position = "none")  

@@ -36,15 +36,15 @@ invisible(lapply(packages, library, character.only = TRUE))
 
 # 0B. Load Functions ----
 #-------------------------#
-if (!file.exists(here::here("functions.R"))) {
- stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
-}
-source(here::here("functions.R"))
-
-# if (!file.exists("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")) {
+# if (!file.exists(here::here("functions.R"))) {
 #   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
 # }
-# source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
+# source(here::here("functions.R"))
+
+if (!file.exists("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")) {
+  stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
+}
+source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
 
 # 0C. Load Config & Logging ----
 if (!file.exists(here::here("config.yml"))) {

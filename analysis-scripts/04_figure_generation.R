@@ -52,19 +52,12 @@ if (!file.exists(rdata_path)) stop("ERROR: 'processing_complete.RData' not found
 load(rdata_path) 
 print(paste("Data loaded successfully from:", rdata_path))
 
-## 0B. Load Functions ----
-#-------------------------#
-if (!file.exists(here::here("functions.R"))) {
-  stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
-}
-source(here::here("functions.R"))
-
 # Ensure functions are loaded
-# func_path <- "C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R"
-# if (!file.exists(func_path)) {
-#   if(file.exists("functions.R")) func_path <- "functions.R" else stop("functions.R not found.")
-# }
-# source(func_path)
+func_path <- "C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R"
+if (!file.exists(func_path)) {
+  if(file.exists("functions.R")) func_path <- "functions.R" else stop("functions.R not found.")
+}
+source(func_path)
 
 # (Re)open log
 try(logr::log_close(), silent = TRUE)
@@ -167,17 +160,18 @@ for (target_var in response_vars) {
     p_trend <- p_trend + labs(
       title = stringr::str_wrap(p_trend$labels$title, width = 50),
       subtitle = stringr::str_wrap(p_trend$labels$subtitle, width = 60)
-    ) + theme(legend.position = "none")
+    ) + theme_publication(base_size = 18)
     
     p_slope <- p_slope + labs(
       title = stringr::str_wrap(p_slope$labels$title, width = 50),
       subtitle = stringr::str_wrap(p_slope$labels$subtitle, width = 60)
-    )
+    ) + theme_publication(base_size = 18) +
+      theme(legend.position = "none")
     
     # Combine using Patchwork
     fig_single <- (p_trend + p_slope) + 
-      plot_layout(widths = c(2, 1), guides = 'collect') &
-      theme_publication(base_size = 18)
+      plot_layout(widths = c(2, 1), guides = "collect")
+      
     
     ggsave(file.path(figure_dir, paste0("Fig_Combined_", short_target, ".tiff")), 
            fig_single, width = 20, height = 8, dpi = 300, compression = "lzw")
@@ -194,7 +188,7 @@ logr::log_print("\n--- Generating Paired-Variable (4-Panel) Figures ---", consol
 # Define which variables you want to plot together as pairs. 
 # You can add as many pairs to this list as you want!
 paired_analyses <- list(
-  c("mode_change", "instability_index")
+  c("mode_change", "instability_index_change")
   # c("another_var", "yet_another_var") # Add more pairs here if needed
 )
 
@@ -221,10 +215,10 @@ for (pair in paired_analyses) {
       )
     }
     
-    p1 <- safe_wrap(p1) + theme(legend.position = "none")
-    p2 <- safe_wrap(p2) + theme(legend.position = "none")
-    p3 <- safe_wrap(p3) + theme(legend.position = "none")
-    p4 <- safe_wrap(p4) + theme(legend.position = "none")
+    p1 <- safe_wrap(p1) + theme_publication(base_size = 18)
+    p2 <- safe_wrap(p2) + theme_publication(base_size = 18) + theme(legend.position = "none")
+    p3 <- safe_wrap(p3) + theme_publication(base_size = 18)
+    p4 <- safe_wrap(p4) + theme_publication(base_size = 18) + theme(legend.position = "none")
     
     # Note: Unifying Y-axes between completely different metrics (like Mode and IIC) 
     # is statistically dangerous because they are on different scales. 
@@ -232,14 +226,13 @@ for (pair in paired_analyses) {
     
     fig_paired <- (p1 + p2) / (p3 + p4) + 
       plot_layout(widths = c(1.8, 1.2), guides = "collect") +
-      plot_annotation(tag_levels = 'A') & 
       theme(
         legend.position = "right", 
         legend.direction = "vertical",
         legend.justification = "top",
         legend.box.margin = margin(l = 10, t = 50) 
-      ) &
-      theme_publication(base_size = 18)
+      )
+      
     
     save_path <- file.path(figure_dir, paste0("Fig_Paired_", short_A, "_vs_", short_B, ".tiff"))
     ggsave(save_path, fig_paired, width = 22, height = 14, dpi = 300, compression = "lzw")

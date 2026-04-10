@@ -14,14 +14,9 @@ if (any(installed_packages == FALSE)) {
 }
 invisible(lapply(packages, library, character.only = TRUE))
 
-if (!file.exists(here::here("functions.R"))) {
-  stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
-}
-source(here::here("functions.R"))
-
-# func_path <- "C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R"
-# if (!file.exists(func_path)) stop("CRITICAL ERROR: 'functions.R' not found.")
-# source(func_path)
+func_path <- "C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R"
+if (!file.exists(func_path)) stop("CRITICAL ERROR: 'functions.R' not found.")
+source(func_path)
 
 config <- yaml::read_yaml(here::here("config.yml"))
 
@@ -902,9 +897,7 @@ if(nrow(baseline_full_data) > 0) {
   logr::log_print("  -> Generating Start vs End Representative Overlay...", console=TRUE)
   
   start_end_overlay_data <- plot_data_reps %>%
-    # Restrict to Expanded limits so the WT peak doesn't crush the y-axis scaling
     dplyr::filter(CAG >= exp_lims[1] & CAG <= exp_lims[2]) %>%
-    group_by(bio_rep_id) %>%
     # Filter for Min and Max timepoints
     dplyr::filter(!!sym(time_var) == min(!!sym(time_var), na.rm=TRUE) | 
                     !!sym(time_var) == max(!!sym(time_var), na.rm=TRUE)) %>%
@@ -912,7 +905,13 @@ if(nrow(baseline_full_data) > 0) {
       !!sym(time_var) == min(!!sym(time_var), na.rm=TRUE), "Start", "End"
     )) %>%
     mutate(Timepoint_Label = factor(Timepoint_Label, levels = c("Start", "End"))) %>%
-    # Normalize height per file so start and end peaks are visually comparable
+    
+    # THE FIX: Isolate exactly one PCR per biological replicate per timepoint
+    group_by(bio_rep_id, Timepoint_Label) %>%
+    dplyr::filter(pcr == min(as.numeric(as.character(pcr)), na.rm = TRUE)) %>%
+    ungroup() %>%
+    
+    # Normalize height per file
     group_by(fsa_filename) %>%
     mutate(Norm_Height = Height / max(Height, na.rm = TRUE)) %>%
     ungroup()
@@ -934,7 +933,7 @@ if(nrow(baseline_full_data) > 0) {
         axis.text.y = element_blank(), axis.ticks.y = element_blank()
       )
     
-    ggsave(file.path(overview_dir, "Representative_Start_vs_End_Overlay.tiff"), p_rep_overlay, width = 8, height = 12, compression = "lzw")
+    ggsave(file.path(overview_dir, "Representative_Start_vs_End_Overlay.tiff"), p_rep_overlay, width = 12, height = 8, compression = "lzw")
   }
   
 } # <-- End of the if(nrow(baseline_full_data) > 0) block

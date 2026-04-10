@@ -61,19 +61,11 @@ if (!file.exists(rdata_path)) stop("ERROR: 'processing_complete.RData' not found
 
 load(rdata_path)
 # Ensure functions are loaded
-
-## 0B. Load Functions ----
-#-------------------------#
-if (!file.exists(here::here("functions.R"))) {
-  stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
+func_path <- "C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R"
+if (!file.exists(func_path)) {
+  if(file.exists("functions.R")) func_path <- "functions.R" else stop("functions.R not found.")
 }
-source(here::here("functions.R"))
-
-# func_path <- "C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R"
-# if (!file.exists(func_path)) {
-#   if(file.exists("functions.R")) func_path <- "functions.R" else stop("functions.R not found.")
-# }
-# source(func_path)
+source(func_path)
 
 if (!exists("modeling_data")) {
   stop(paste(
