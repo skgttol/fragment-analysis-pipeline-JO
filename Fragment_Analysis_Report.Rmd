@@ -1,0 +1,573 @@
+---
+title: "Fragment Analysis & Somatic Instability Report"
+author: "`r config$key_variables$primary_group_var %||% 'Automated Pipeline'`"
+date: "`r format(Sys.time(), '%B %d, %Y at %H:%M')`"
+output:
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    code_folding: hide
+    self_contained: true
+---
+
+```{r setup, include=FALSE}
+# ========================================================================= #
+# SECTION 1: CONFIGURATION & ENVIRONMENT
+# ========================================================================= #
+# config, modeling_data, all_model_outputs, and plot_database are passed in
+# by Script 06 via knitr::knit() with envir=. No .RData loading needed here.
+
+knitr::opts_chunk$set(
+  echo      = FALSE,
+  warning   = FALSE,
+  message   = FALSE,
+  fig.width = 10,
+  fig.height = 7,
+  out.width.px = 800
+)
+
+options(out.width.px = 800)
+options(htmltools.preserve.raw = FALSE)
+
+# --- Libraries ---
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(patchwork)
+  library(knitr)
+  library(kableExtra)
+  library(plotly)
+  library(DT)
+  library(htmltools)
+  library(ragg)
+})
+
+# =========================================================================
+# USER CONTROL PANEL
+# Adjust these to customise which sections appear in the report.
+# =========================================================================
+vars_to_include   <- NULL           # NULL = all; or e.g. c("mode_change", "instability_index_change")
+show_trend        <- TRUE           # Modeled expansion trajectory
+show_slopes       <- TRUE           # Per-group expansion rates
+show_waterfall    <- TRUE           # BLUP-ranked responder plot
+show_qc_tabs      <- TRUE           # QC & diagnostics sub-tab
+show_stat_tables  <- TRUE           # Interactive statistical tables
+show_extra_tables <- TRUE           # QC_Clone_Differences, Rate_Comparisons, BLUPs table
+plotly_height     <- 500            # px height for plotly widgets
+
+# =========================================================================
+# SECTION 2: ENVIRONMENT VALIDATION
+# =========================================================================
+# Abort early with informative messages rather than cryptic downstream errors.
+
+required_objects <- c("config", "plot_database", "all_model_outputs",
+                       "response_vars", "response_labels", "response_shortnames",
+                       "output_dir")
+missing_objects <- required_objects[!sapply(required_objects, exists)]
+if (length(missing_objects) > 0) {
+  stop(paste(
+    "REPORT ERROR: The following objects were not found in the environment.\n",
+    "Ensure Script 06 passes them correctly:\n",
+    paste(" -", missing_objects, collapse = "\n")
+  ))
+}
+
+# =========================================================================
+# SECTION 3: BUILD PLOT REGISTRY
+# =========================================================================
+# Mirrors the logic in Script 04, kept here so the report is self-contained.
+# All patterns match the actual plot_database keys produced by Script 02.
+
+all_plots <- list(descriptive = list(), modeling = list(), qc = list(), exploratory = list())
+
+if (exists("plot_database") && length(plot_database) > 0) {
+  nms <- names(plot_database)
+  
+  # FIX: corrected prefixes to match actual Script 02 keys
+  # Script 02 uses "01_avg_", "02_detail_", "03_profiles_" NOT "p_avg", "p_detail", "p_profiles"
+  all_plots$descriptive  <- plot_database[grep("^p_avg_|p_detail_|p_profiles_|^p_heatmap_|^p_raincloud_", nms)]
+  all_plots$modeling     <- plot_database[grep("^p_preds_|^p_overall_|^p_waterfall_", nms)]
+  all_plots$qc           <- plot_database[grep("^p_qc_|^p_clone_het_|^p_volcano_", nms)]
+  all_plots$exploratory  <- plot_database[grep("^p_cross_corr", nms)]
+  
+  # Uncategorised catch-all (makes new plots visible even if patterns aren't updated)
+  known_keys <- c(
+    names(all_plots$descriptive), names(all_plots$modeling),
+    names(all_plots$qc), names(all_plots$exploratory)
+  )
+  uncategorised <- setdiff(nms, known_keys)
+  if (length(uncategorised) > 0) {
+    all_plots$other <- plot_database[uncategorised]
+  }
+}
+
+# Pull loose exploratory objects from the environment (Script 03 outputs)
+for (.obj in c("p_biplot", "p_scree", "p_loadings_bars", "p_corr_ggpairs_color")) {
+  if (exists(.obj)) all_plots$exploratory[[.obj]] <- get(.obj)
+}
+
+# =========================================================================
+# SECTION 4: RESOLVE ACTIVE RESPONSE VARIABLES
+# =========================================================================
+report_vars <- if (!is.null(vars_to_include)) {
+  intersect(response_vars, vars_to_include)
+} else {
+  response_vars
+}
+
+if (length(report_vars) == 0) {
+  stop("REPORT ERROR: No response variables to report. Check 'vars_to_include' and 'response_vars'.")
+}
+
+# =========================================================================
+# SECTION 5: HELPER FUNCTIONS
+# =========================================================================
+
+# Render a ggplot as an interactive plotly widget, with graceful fallback.
+safe_plotly <- function(p, height = plotly_height) {
+  if (is.null(p)) {
+    return(htmltools::div(
+      class = "alert alert-warning",
+      style = "font-size: 0.9em; padding: 8px 12px;",
+      htmltools::tags$i(class = "fa fa-info-circle"),
+      " Plot not available — may not have been generated for this experiment style."
+    ))
+  }
+  if (inherits(p, "ggplot")) {
+    tryCatch({
+      p_int <- plotly::ggplotly(p, height = height) %>%
+        plotly::layout(margin = list(b = 50, l = 60)) %>%
+        plotly::config(displayModeBar = TRUE, displaylogo = FALSE,
+                       modeBarButtonsToRemove = list("sendDataToCloud", "autoScale2d"))
+      return(htmlwidgets::as_widget(p_int))
+    },
+      error = function(e) {
+        # Create a temporary file path
+        tmp_file <- tempfile(fileext = ".png")
+        
+        # Save the plot to the temp file
+        ggplot2::ggsave(tmp_file, plot = p, width = 10, height = 7, dpi = 120, device = ragg::agg_png)
+        
+        # Fallback to static rendering
+        htmltools::tagList(
+          htmltools::p(style = "color: #888; font-size: 0.85em;",
+                       "(Static image — interactive conversion not supported for this plot type.)"),
+          htmltools::tags$img(
+            src = knitr::image_uri(tmp_file),
+            style = "max-width:100%;"
+          )
+        )
+      }
+    )
+  } else {
+    return(p)  # Already a plotly/htmlwidget
+  }
+}
+
+safe_dt <- function(df, caption = NULL, page_length = 8) {
+  # 1. Check if df is actually a data frame and has columns
+  if (is.null(df) || !is.data.frame(df) || ncol(df) == 0 || nrow(df) == 0) {
+    return(htmltools::p(style = "color: #888;", htmltools::em("No data available.")))
+  }
+
+  # 2. Clean 'Table-Breakers': Replace Inf/NaN with NA and ensure valid names
+  df_clean <- df %>%
+    dplyr::rename_with(~ ifelse(.x == "" | is.na(.x), paste0("V", seq_along(.x)), .x)) %>%
+    dplyr::mutate(across(where(is.numeric), ~ ifelse(is.infinite(.x) | is.nan(.x), NA, .x))) %>%
+    dplyr::mutate(across(where(is.numeric), ~ round(.x, 5)))
+
+  # 3. Render with explicit fillContainer = FALSE 
+  # Sometimes 'asis' loops struggle if the widget tries to fill a container that doesn't exist yet
+  DT::datatable(
+    df_clean,
+    caption    = caption,
+    rownames   = FALSE,
+    filter     = "top",
+    width      = "100%",
+    height     = "auto", # Change from fixed to auto
+    fillContainer = FALSE,
+    extensions = "Buttons",
+    options    = list(
+      pageLength = page_length,
+      scrollX    = TRUE,
+      autoWidth  = TRUE,
+      dom        = "Bfrtip",
+      buttons    = list("csv", "excel")
+    )
+  )
+}
+
+# Format a p-value with stars for inline display.
+fmt_pval <- function(p) {
+  if (is.null(p) || is.na(p)) return("—")
+  stars <- dplyr::case_when(p < 0.001 ~ "***", p < 0.01 ~ "**", p < 0.05 ~ "*", TRUE ~ "ns")
+  paste0(formatC(p, format = "e", digits = 2), " ", stars)
+}
+
+# Render a named list of tables as sub-sections.
+render_table_list <- function(tbl_list, skip_patterns = NULL) {
+  out <- list()
+  for (tbl_name in names(tbl_list)) {
+    if (!is.null(skip_patterns) && any(stringr::str_detect(tbl_name, skip_patterns))) next
+    tbl <- tbl_list[[tbl_name]]
+    if (!is.data.frame(tbl) || nrow(tbl) == 0) next
+    friendly <- stringr::str_replace_all(tbl_name, "_", " ")
+    out <- c(out, list(
+      htmltools::h4(friendly, style = "color: #2c3e50; margin-top: 1.2em;"),
+      safe_dt(tbl, caption = friendly)
+    ))
+  }
+  if (length(out) == 0) return(htmltools::p(em("No tables available.")))
+  htmltools::tagList(out)
+}
+
+# =========================================================================
+# SECTION 5: CHILD TEMPLATE DEFINITION
+# =========================================================================
+child_rmd_path <- file.path(tempdir(), "child_template.Rmd")
+
+xfun::write_utf8(c(
+  '---',
+  'output: html_fragment',
+  '---',
+  '',
+  '```{r, include=FALSE}',
+  '# No label here to avoid duplicate errors in loops',
+  'var           <- "{{VAR}}"',
+  'short_var      <- response_shortnames[[var]] %||% var',
+  'friendly_name <- response_labels[[var]]    %||% stringr::str_to_title(var)',
+  'model_outputs <- all_model_outputs[[var]]',
+  'rates_tbl     <- model_outputs$results_tables$Group_Expansion_Rates',
+  'get_plot <- function(category, key) { all_plots[[category]][[key]] %||% NULL }',
+  '```',
+  '',
+  '## `r friendly_name` {.tabset .tabset-pills}',
+  '',
+  '```{r, results="asis", echo=FALSE}',
+  'if (!is.null(rates_tbl) && nrow(rates_tbl) > 0) {',
+  '  slope_col <- intersect(c("slope","Slope","Estimate","emmean","Expansion_Rate"), names(rates_tbl))[1]',
+  '  pval_col  <- intersect(c("p.value","P_Value","P_Value_Adjusted"), names(rates_tbl))[1]',
+  '  if (!is.na(slope_col) && !is.na(pval_col)) {',
+  '    n_sig      <- sum(as.numeric(rates_tbl[[pval_col]]) < 0.05, na.rm = TRUE)',
+  '    max_slope  <- rates_tbl %>% dplyr::slice_max(order_by = abs(.data[[slope_col]]), n = 1, with_ties = FALSE)',
+  '    card <- htmltools::div(',
+  '      class = "alert alert-info",',
+  '      style = "border-left:4px solid #3498db; padding:10px 15px; border-radius:4px; margin-bottom:1em; font-size:0.9em;",',
+  '      htmltools::tags$b(paste0("\u2139\ufe0f ", friendly_name, " \u2014 Model Summary")),',
+  '      htmltools::tags$br(),',
+  '      sprintf("%d group(s) with significant expansion (p < 0.05). Fastest: %s (slope = %.4f).",',
+  '              n_sig, as.character(max_slope[[1]]), as.numeric(max_slope[[slope_col]]))',
+  '    )',
+  '    print(htmltools::tagList(card))',
+  '  }',
+  '}',
+  '```',
+  '',
+  '### Trends & Trajectories',
+  '',
+  '**Group Averages (Raw Data)** — Mean ± SEM per group.',
+  '',
+  '```{r, echo=FALSE}',
+  'p_avg_key <- paste0("p_avg_", short_var)',
+  'if (is.null(get_plot("descriptive", p_avg_key))) p_avg_key <- paste0("p_preds_", short_var)',
+  'safe_plotly(get_plot("descriptive", p_avg_key))',
+  '```',
+  '',
+  '**Modeled Trajectories** — LMER-fitted slopes controlling for random effects.',
+  '',
+  '```{r, echo=FALSE}',
+  'safe_plotly(get_plot("modeling", paste0("p_overall_2a_", short_var)))',
+  '```',
+  '',
+  '```{r, results="asis", echo=FALSE}',
+  'p_rc <- get_plot("descriptive", paste0("p_raincloud_", short_var))',
+  'if (!is.null(p_rc)) {',
+  '  cat("\n\n---\n\n**Distribution Shift** — Raincloud plot showing population variance over time.\n\n")',
+  '  print(htmltools::tagList(safe_plotly(p_rc)))',
+  '}',
+  '```',
+  '',
+  '### Expansion Rates',
+  '',
+  '**Estimated Slopes by Group**',
+  '',
+  '```{r, echo=FALSE}',
+  'p_slopes_key <- paste0("p_overall_2b_", short_var)',
+  'if (is.null(get_plot("modeling", p_slopes_key))) p_slopes_key <- paste0("p_preds_avg_", short_var)',
+  'safe_plotly(get_plot("modeling", p_slopes_key))',
+  '```',
+  '',
+  '**Expansion Rate Table**',
+  '',
+  '```{r, results="asis", echo=FALSE}',
+  'if (!is.null(rates_tbl) && nrow(rates_tbl) > 0) {',
+  '  tbl_display <- rates_tbl %>% dplyr::mutate(dplyr::across(where(is.numeric), ~round(.x, 4)))',
+  '  kbl_out <- kableExtra::kbl(tbl_display, format = "html", align = "r") %>%',
+  '    kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = FALSE)',
+  '  sig_col  <- intersect(c("p.value","P_Value","P_Value_Adjusted"), names(rates_tbl))[1]',
+  '  sig_rows <- if (!is.na(sig_col)) which(as.numeric(rates_tbl[[sig_col]]) < 0.05) else integer(0)',
+  '  if (length(sig_rows) > 0)',
+  '    kbl_out <- kbl_out %>% kableExtra::row_spec(sig_rows, bold = TRUE, background = "#18bc9c", color = "white")',
+  '  cat(as.character(kbl_out))',
+  '}',
+  '```',
+  '',
+  '### Individual Profiles',
+  '',
+  '```{r, results="asis", echo=FALSE}',
+  'p_wf <- get_plot("modeling", paste0("p_waterfall_", short_var))',
+  'if (!is.null(p_wf) && show_waterfall) {',
+  '  cat("\n\n**Clonal Waterfall (BLUP-Ranked)** — Variation in expansion across biological replicates.\n\n")',
+  '  print(htmltools::tagList(safe_plotly(p_wf)))',
+  '  cat("\n\n---\n\n")',
+  '}',
+  'p_ct <- get_plot("modeling", paste0("p_clone_trends_", short_var))',
+  'if (!is.null(p_ct)) {',
+  '  cat("\n\n**Individual Clone Trajectories**\n\n")',
+  '  print(htmltools::tagList(safe_plotly(p_ct)))',
+  '}',
+  '```',
+  '',
+  '### Quality Control',
+  '',
+  '```{r, results="asis", echo=FALSE}',
+  'qc_map <- list(',
+  '  Volcano        = paste0("p_volcano_",           short_var),',
+  '  Heterogeneity = paste0("p_clone_het_",         short_var),',
+  '  Spatial        = paste0("p_heatmap_",           short_var),',
+  '  Slope_Compare = paste0("p_qc_slope_compare_", short_var)',
+  ')',
+  'any_qc <- FALSE',
+  'for (label in names(qc_map)) {',
+  '  p_obj <- get_plot("qc", qc_map[[label]]) %||% get_plot("descriptive", qc_map[[label]])',
+  '  if (!is.null(p_obj)) {',
+  '    any_qc <- TRUE',
+  '    cat(paste0("\n\n**", label, "**\n\n"))',
+  '    print(htmltools::tagList(safe_plotly(p_obj)))',
+  '    cat("\n\n---\n\n")',
+  '  }',
+  '}',
+  'if (!any_qc) cat("*No QC plots available for this variable.*")',
+  '```',
+  '',
+  '### Statistical Tables',
+  '',
+  '```{r, results="asis", echo=FALSE}',
+  'tbls <- model_outputs$results_tables',
+  'if (is.null(tbls)) {',
+  '  cat("_No model output found for this variable._")',
+  '} else {',
+  '  priority_tables <- c("Group_Expansion_Rates","Model_Coefficients","Rate_Comparisons","Individual_Slopes_BLUPs")',
+  '  all_table_names <- if (show_extra_tables) names(tbls) else priority_tables',
+  '  any_tbl <- FALSE',
+  '  for (tbl_name in all_table_names) {',
+  '    tbl <- tbls[[tbl_name]]',
+  '    if (!is.null(tbl) && is.data.frame(tbl) && nrow(tbl) > 0) {',
+  '      any_tbl <- TRUE',
+  '      cat(paste0("\n\n#### ", stringr::str_replace_all(tbl_name, "_", " "), "\n\n"))',
+  '      print(htmltools::tagList(safe_dt(tbl)))',
+  '      cat("\n\n")',
+  '    }',
+  '  }',
+  '  if (!any_tbl) cat("*No tables available for this variable.*")',
+  '}',
+  '```'
+), child_rmd_path)
+
+```
+
+---
+
+## Experiment Overview {.unnumbered}
+
+```{r experiment-summary}
+# =========================================================================
+# Experiment metadata card — rendered once at the top of the report
+# =========================================================================
+primary_var  <- config$key_variables$primary_group_var
+time_var     <- config$key_variables$time_variable
+secondary_var <- config$key_variables$secondary_group_var %||% "—"
+re_cross      <- config$key_variables$optional_crossed_effect %||% "—"
+exp_style     <- stringr::str_to_title(config$key_variables$experiment_style %||% "clone")
+
+# Quick summary stats from modeling_data if available
+n_groups <- n_reps <- n_timepoints <- "—"
+if (exists("modeling_data") && !is.null(modeling_data)) {
+  n_groups     <- dplyr::n_distinct(modeling_data[[primary_var]], na.rm = TRUE)
+  n_timepoints <- dplyr::n_distinct(modeling_data[[time_var]], na.rm = TRUE)
+  if (!is.null(secondary_var) && secondary_var != "—" && secondary_var %in% names(modeling_data)) {
+    n_reps <- dplyr::n_distinct(modeling_data[[secondary_var]], na.rm = TRUE)
+  }
+}
+
+htmltools::div(
+  class = "well",
+  style = "background: #f8f9fa; border-left: 4px solid #18bc9c; padding: 14px 18px; border-radius: 4px;",
+  htmltools::tags$table(
+    style = "width:100%; font-size: 0.95em;",
+    htmltools::tags$tr(
+      htmltools::tags$td(style = "width:50%; padding: 4px 0;",
+        htmltools::tags$b("Experiment Style: "), exp_style),
+      htmltools::tags$td(style = "padding: 4px 0;",
+        htmltools::tags$b("Output Directory: "),
+        htmltools::tags$code(style = "font-size: 0.85em;", output_dir))
+    ),
+    htmltools::tags$tr(
+      htmltools::tags$td(style = "padding: 4px 0;",
+        htmltools::tags$b("Primary Group: "), str_to_title(primary_var),
+        htmltools::tags$span(style = "color: #888; margin-left: 6px;",
+                             paste0("(", n_groups, " levels)"))),
+      htmltools::tags$td(style = "padding: 4px 0;",
+        htmltools::tags$b("Secondary Group: "), str_to_title(secondary_var))
+    ),
+    htmltools::tags$tr(
+      htmltools::tags$td(style = "padding: 4px 0;",
+        htmltools::tags$b("Time Variable: "), str_to_title(time_var),
+        htmltools::tags$span(style = "color: #888; margin-left: 6px;",
+                             paste0("(", n_timepoints, " timepoints)"))),
+      htmltools::tags$td(style = "padding: 4px 0;",
+        htmltools::tags$b("Batch / Crossed Effect: "), str_to_title(re_cross))
+    ),
+    htmltools::tags$tr(
+      htmltools::tags$td(style = "padding: 4px 0;",
+        htmltools::tags$b("Response Variables: "),
+        paste(report_vars, collapse = ", ")),
+      htmltools::tags$td(style = "padding: 4px 0;",
+        htmltools::tags$b("Report Generated: "),
+        format(Sys.time(), "%Y-%m-%d %H:%M"))
+    )
+  )
+)
+```
+
+---
+
+# Results by Variable {.tabset .tabset-pills}
+
+```{r generate_tabs, results='asis', echo=FALSE}
+for (var in report_vars) {
+  var_safe <- gsub("[^A-Za-z0-9]", "", var)
+  var_rmd  <- tempfile(fileext = ".Rmd")
+  rmd_text <- readLines(child_rmd_path)
+  rmd_text <- gsub("\\{\\{VAR\\}\\}",  var,      rmd_text)
+  rmd_text <- gsub("\\{\\{SAFE\\}\\}", var_safe,  rmd_text)
+  writeLines(rmd_text, var_rmd)
+  child_out <- knitr::knit_child(var_rmd, envir = environment(), quiet = TRUE)
+  cat(child_out, sep = "\n")
+}
+```
+
+
+---
+
+# Combined Analysis {.tabset .tabset-pills}
+
+## Cross-Metric Correlation
+
+Compares expansion rates (True BLUP slope) for **Modal CAG length** vs. **Instability Index**
+across all biological replicates. A positive correlation indicates that clones expanding
+fastest in modal CAG are also accumulating the most somatic instability.
+
+```{r cross-corr, out.width="100%"}
+p_cc <- all_plots$exploratory$p_cross_corr_mode_vs_iic
+if (!is.null(p_cc)) {
+  safe_plotly(p_cc, height = 550)
+} else {
+  htmltools::HTML("<p style='color:#888;'><em>Cross-correlation plot not generated &mdash; requires both modal and instability index variables to be modelled in Script 02.</em></p>")
+}
+```
+
+## Principal Component Analysis
+
+PCA reduces dimensionality across all measured variables to identify overarching patterns,
+cluster structure, or batch effects.
+
+```{r pca, out.width="100%"}
+p_bp <- all_plots$exploratory$p_biplot
+p_sc <- all_plots$exploratory$p_scree
+p_ld <- all_plots$exploratory$p_loadings_bars
+
+if (!is.null(p_bp)) {
+  htmltools::h4("Biplot")
+  htmltools::p("Points = biological replicates; arrows = variables driving separation.")
+  safe_plotly(p_bp, height = 550)
+} else {
+  htmltools::HTML("<p style='color:#888;'><em>PCA biplot not available (Script 03 may not have been run, or n was too small).</em></p>")
+}
+
+if (!is.null(p_sc)) {
+  htmltools::HTML("<br><hr><br>")
+  htmltools::h4("Scree Plot")
+  safe_plotly(p_sc, height = 350)
+}
+
+if (!is.null(p_ld)) {
+  htmltools::HTML("<br><hr><br>")
+  htmltools::h4("Variable Loadings")
+  htmltools::p("Contribution of each variable to the first two principal components.")
+  safe_plotly(p_ld, height = 400)
+}
+```
+
+## Correlation Matrix
+
+Pairwise relationships between all measured variables. Note: `ggpairs` composites cannot
+be converted to interactive plotly — rendered as static image.
+
+```{r corr-matrix, out.width="100%", fig.width=14, fig.height=14}
+p_cm <- all_plots$exploratory$p_corr_ggpairs_color
+if (!is.null(p_cm)) {
+  print(p_cm)
+} else {
+  cat("*Correlation matrix not available.*")
+}
+```
+
+---
+
+# Pipeline Diagnostics {.tabset}
+
+Plots generated during Script 01 data processing — independent of any single response variable.
+
+## Replication QC
+
+```{r rep-qc, out.width="100%"}
+p_rc  <- plot_database[["p_qc_rep_counts"]]
+p_rcb <- plot_database[["p_qc_rep_counts_bubble"]]
+
+if (!is.null(p_rc)) {
+  htmltools::h4("Replicate Count Summary")
+  safe_plotly(p_rc, height = 450)
+}
+if (!is.null(p_rcb)) {
+  htmltools::HTML("<br>")
+  htmltools::h4("Replicate Count Bubble Plot")
+  safe_plotly(p_rcb, height = 450)
+}
+if (is.null(p_rc) && is.null(p_rcb)) {
+  cat("*No replication QC plots available.*")
+}
+```
+
+## Hierarchical Legend
+
+```{r legend, out.width="60%", fig.height=4}
+p_leg <- plot_database[["p_hierarchical_legend"]]
+if (!is.null(p_leg)) {
+  print(p_leg)
+} else {
+  cat("*Legend plot not available.*")
+}
+```
+
+---
+
+# Session Info {.unnumbered}
+
+```{r session-info, echo=TRUE}
+sessioninfo::session_info()
+```
