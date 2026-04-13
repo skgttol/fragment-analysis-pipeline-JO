@@ -432,7 +432,8 @@ for (resp_var in response_vars) {
     
     print(p_avg)
     ggsave(file.path(plots_dir, paste0("01_avg_", short_resp_var, ".tiff")), p_avg, width = if(is_treatment_exp) 12 else 10, height = 7, dpi = 300, device = 'tiff', compression = "lzw")
-    plot_database[[paste0("01_avg_", short_resp_var)]] <- p_avg
+    plot_database[[paste0("p_avg_", short_resp_var)]] <- p_avg
+    assign(paste0("p_avg_", short_resp_var), p_avg)
   }
   
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
@@ -500,8 +501,8 @@ for (resp_var in response_vars) {
     p_detail <- p_detail + scale_x_continuous(breaks = as.numeric(x_breaks))
   }
   
-  assign(paste0("02_detail_", short_resp_var), p_detail)
-  plot_database[[paste0("02_detail_", short_resp_var)]] <- p_detail
+  assign(paste0("p_detail_", short_resp_var), p_detail)
+  plot_database[[paste0("p_detail_", short_resp_var)]] <- p_detail
   
   print(p_detail)
   ggsave(
@@ -558,9 +559,9 @@ for (resp_var in response_vars) {
     }
     
     # Store the plot object
-    assign(paste0("03_profiles_", short_resp_var), combined_plot_traj)
+    assign(paste0("p_profiles_", short_resp_var), combined_plot_traj)
     # --- Add to plot database ---
-    plot_database[[paste0("03_profiles_", short_resp_var)]] <- combined_plot_traj
+    plot_database[[paste0("p_profiles_", short_resp_var)]] <- combined_plot_traj
     
     print(combined_plot_traj)
     ggsave(

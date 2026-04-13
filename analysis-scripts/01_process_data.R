@@ -294,7 +294,22 @@ for (current_var in response_vars) {
   ggsave(
     file.path(diagnostics_dir, paste0("p_outlier_bio_", short_resp_var, ".tiff")),
     p_bio_diag, width = 14, height = 10, dpi = 150, device = 'tiff', compression = "lzw"
-  )    
+  )
+  
+  # --- AUTO-REMOVE BIOLOGICAL OUTLIERS ---
+  if (isTRUE(config$parameters$remove_bio_outliers)) {
+    logr::log_print(paste("...Auto-removing biological outliers for", current_var, "(Dropping entire row)"))
+    
+    # Filter out the outlier rows completely, then drop the temporary calculation columns
+    summary_per_rep <- summary_with_outliers %>%
+      dplyr::filter(is_outlier == FALSE) %>%
+      dplyr::select(-Q1, -Q3, -IQR, -is_outlier)
+    
+  } else {
+    # Even if we don't remove them, we must clean up the temp columns for the next loop iteration
+    summary_per_rep <- summary_with_outliers %>%
+      dplyr::select(-Q1, -Q3, -IQR, -is_outlier)
+  }
   
   # --- Plot 2: Technical Replicate (PCR) Outliers ---
   logr::log_print(paste("...generating technical outlier plot for", current_var))
@@ -363,6 +378,22 @@ for (current_var in response_vars) {
     file.path(diagnostics_dir, paste0("p_outlier_tech_", short_resp_var, ".tiff")),
     p_tech_diag, width = 16, height = 10, dpi = 150, device = 'tiff', compression = "lzw"
   )  
+  
+  # --- AUTO-REMOVE TECHNICAL OUTLIERS ---
+  if (isTRUE(config$parameters$remove_tech_outliers)) {
+    logr::log_print(paste("...Auto-removing technical (PCR) outliers for", current_var, "(Dropping entire row)"))
+    
+    # Filter out the outlier rows completely, then drop the temporary calculation columns
+    data_per_pcr <- data_with_tech_outliers %>%
+      dplyr::filter(is_outlier == FALSE) %>%
+      dplyr::select(-Q1, -Q3, -IQR, -is_outlier)
+    
+  } else {
+    # Clean up temp columns for the next loop iteration
+    data_per_pcr <- data_with_tech_outliers %>%
+      dplyr::select(-Q1, -Q3, -IQR, -is_outlier)
+  }
+  
 } # End of response variable loop
 
 #=============================================================================#
@@ -609,6 +640,34 @@ log_print("\n--- Starting PART 5: Exporting Data Tables ---", console = TRUE)
 
 all_bio_outliers <- bind_rows(bio_outliers_list, .id = "response_variable")
 all_tech_outliers <- bind_rows(tech_outliers_list, .id = "response_variable")
+
+# --- UPDATE EXCLUDED_DATA WITH STATISTICAL OUTLIERS ---
+# If the auto-remove flags were set to TRUE, append the dropped rows to the 
+# master excluded_data log so downstream scripts see them.
+
+if (isTRUE(config$parameters$remove_bio_outliers) && nrow(all_bio_outliers) > 0) {
+  bio_excl_formatted <- all_bio_outliers %>%
+    dplyr::mutate(exclusion_reason = paste("Bio Outlier (IQR):", response_variable)) %>%
+    # CRITICAL FIX: Force all columns to character to prevent bind_rows type crashes
+    dplyr::mutate(dplyr::across(dplyr::everything(), as.character)) 
+  
+  excluded_data <- dplyr::bind_rows(
+    excluded_data %>% dplyr::mutate(dplyr::across(dplyr::everything(), as.character)), 
+    bio_excl_formatted
+  )
+}
+
+if (isTRUE(config$parameters$remove_tech_outliers) && nrow(all_tech_outliers) > 0) {
+  tech_excl_formatted <- all_tech_outliers %>%
+    dplyr::mutate(exclusion_reason = paste("Tech Outlier (IQR):", response_variable)) %>%
+    # CRITICAL FIX: Force all columns to character to prevent bind_rows type crashes
+    dplyr::mutate(dplyr::across(dplyr::everything(), as.character))
+  
+  excluded_data <- dplyr::bind_rows(
+    excluded_data %>% dplyr::mutate(dplyr::across(dplyr::everything(), as.character)), 
+    tech_excl_formatted
+  )
+}
 
 export_list_long <- list(
   'Data_Per_PCR' = data_per_pcr,

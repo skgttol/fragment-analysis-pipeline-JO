@@ -10,7 +10,7 @@
 #=============================================================================#
 
 # 0A. Load Libraries ----
-packages <- c("tidyverse", "here", "yaml", "logr", "rmarkdown", "plotly", "kableExtra")
+packages <- c("tidyverse", "here", "yaml", "logr", "rmarkdown", "plotly", "kableExtra", "knitr", "htmltools", "ragg")
 installed_packages <- packages %in% rownames(utils::installed.packages())
 if (any(installed_packages == FALSE)) {
   utils::install.packages(packages[!installed_packages])

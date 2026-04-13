@@ -1161,7 +1161,17 @@ for (geno in unique_genos) {
     biorep <- unique_bioreps[i]
     rep_data <- geno_data %>% dplyr::filter(bio_rep_id == biorep)
     curr_clone <- unique(rep_data[[config$key_variables$secondary_group_var]])
-    base_val <- baseline_table %>% dplyr::filter(bio_rep_id == biorep) %>% pull(baseline_cag); if(length(base_val) == 0) base_val <- NA
+    # 1. Extract the parent bio_id for the current replicate
+    curr_bio_id <- unique(rep_data$bio_id)[1]
+    
+    # 2. Look up the baseline using bio_id instead of bio_rep_id
+    base_val <- if(mode_name != "WT") { 
+      val <- baseline_table %>% 
+        dplyr::filter(bio_id == curr_bio_id) %>% 
+        pull(baseline_cag)
+      
+      if(length(val) > 0) val[1] else NA 
+    } else NA          
     rows_list <- list()
     
     # --- DYNAMIC PCR COUNT ---
