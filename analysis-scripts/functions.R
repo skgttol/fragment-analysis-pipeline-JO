@@ -1131,36 +1131,42 @@ summarize_data <- function(normalized_data, config, all_grouping_vars) {
 #' @param config The loaded configuration list.
 #' @param all_grouping_vars A character vector of all grouping columns.
 #' @return A named list containing `modeling_data` and `shared_baseline_pcr_points`.
+#' Create Baseline Data for Plotting and Modeling
+#'
+#' @description Universal function to handle shared vs. individual baselines.
+#' Adapts based on `baseline_grouping_level` and `share_baselines` in config.yml.
 create_baseline_data <- function(data_per_pcr, summary_per_rep, config, all_grouping_vars) {
   
   time_var <- config$key_variables$time_variable
   baseline_method <- config$parameters$baseline_grouping_level %||% "group"
   
-  # Check if the user explicitly wants to share (duplicate) baselines across groups
   share_baselines <- config$parameters$share_baselines %||% FALSE
-  if (is.character(share_baselines)) {
-    share_baselines <- tolower(share_baselines) %in% c("true", "yes", "t", "1")
-  }
+  if (is.character(share_baselines)) share_baselines <- tolower(share_baselines) %in% c("true", "yes", "t", "1")
   
+  # ── CRITICAL FIX: Identify label columns to strip before broadcasting ──
+  label_cols <- c("Genotype_Pub", "Genotype_Exp", "label_text")
+  found_labels <- label_cols[label_cols %in% colnames(data_per_pcr)]
+  
+  # Ensure the master combinations table HOLDS the correct labels
   all_group_combinations <- data_per_pcr %>%
-    dplyr::distinct(dplyr::across(dplyr::all_of(all_grouping_vars)))
+    dplyr::distinct(dplyr::across(dplyr::all_of(c(all_grouping_vars, found_labels))))
   
   # =====================================================================#
-  # PATH A: Global Control (Inherently copies one Day 0 to ALL groups)
+  # PATH A: Global Control 
   # =====================================================================#
   if (baseline_method == "global_control") {
     logr::log_print("Creating shared baseline data for 'global_control' (Dropping all grouping vars at Day 0).")
     
     day0_pcr <- data_per_pcr %>%
       dplyr::filter(!!rlang::sym(time_var) == 0) %>%
-      dplyr::select(-dplyr::any_of(all_grouping_vars)) %>%
+      dplyr::select(-dplyr::any_of(c(all_grouping_vars, found_labels))) %>%
       dplyr::distinct()
     
     shared_baseline_pcr_points <- tidyr::crossing(all_group_combinations, day0_pcr)
     
     day0_bio <- summary_per_rep %>%
       dplyr::filter(!!rlang::sym(time_var) == 0) %>%
-      dplyr::select(-dplyr::any_of(all_grouping_vars)) %>%
+      dplyr::select(-dplyr::any_of(c(all_grouping_vars, found_labels))) %>%
       dplyr::distinct()
     
     expanded_baseline_bio_reps <- tidyr::crossing(all_group_combinations, day0_bio)
@@ -1174,7 +1180,6 @@ create_baseline_data <- function(data_per_pcr, summary_per_rep, config, all_grou
   } else if (baseline_method == "custom") {
     
     if (isTRUE(share_baselines)) {
-      # --- User wants to duplicate Day 0 across specific groups ---
       drop_vars_raw <- config$parameters$baseline_drop_vars
       
       if (is.null(drop_vars_raw) || length(drop_vars_raw) == 0 || drop_vars_raw[1] == 'null') {
@@ -1189,18 +1194,20 @@ create_baseline_data <- function(data_per_pcr, summary_per_rep, config, all_grou
         
         logr::log_print(paste("Creating custom shared baselines. Dropping:", paste(drop_vars, collapse = ", "), "| Segregating strictly by:", paste(join_keys, collapse = ", ")))
         
+        # ── CRITICAL FIX: Strip old labels from the raw Day 0 points ──
         day0_pcr <- data_per_pcr %>%
           dplyr::filter(!!rlang::sym(time_var) == 0) %>%
-          dplyr::select(-dplyr::any_of(drop_vars)) %>%
+          dplyr::select(-dplyr::any_of(c(drop_vars, found_labels))) %>% 
           dplyr::distinct() 
         
         shared_baseline_pcr_points <- all_group_combinations %>%
           dplyr::left_join(day0_pcr, by = join_keys, relationship = "many-to-many") %>%
           dplyr::filter(!is.na(!!sym(time_var))) 
         
+        # ── CRITICAL FIX: Strip old labels from the raw Day 0 Bio-Reps ──
         day0_bio <- summary_per_rep %>%
           dplyr::filter(!!rlang::sym(time_var) == 0) %>%
-          dplyr::select(-dplyr::any_of(drop_vars)) %>%
+          dplyr::select(-dplyr::any_of(c(drop_vars, found_labels))) %>%
           dplyr::distinct()
         
         expanded_baseline_bio_reps <- all_group_combinations %>%
@@ -1212,14 +1219,13 @@ create_baseline_data <- function(data_per_pcr, summary_per_rep, config, all_grou
       }
       
     } else {
-      # --- User is using custom math, but NO SHARING for plots ---
       logr::log_print("Method is 'custom', but 'share_baselines' is FALSE. Using exact individual Day 0 points.")
       modeling_data <- summary_per_rep
       shared_baseline_pcr_points <- data_per_pcr %>% dplyr::filter(!!rlang::sym(time_var) == 0)
     }
     
     # =====================================================================#
-    # PATH C: Standard Individual Baselines ("group", "genotype", etc.)
+    # PATH C: Standard Individual Baselines
     # =====================================================================#
   } else {
     logr::log_print(paste("Using individual baselines. Method specified:", baseline_method))
@@ -1304,15 +1310,30 @@ run_statistical_model <- function(data_summary, config, response_variable) {
   } else {
     re1 <- cfg_vars$repeated_measure_var
     re2 <- cfg_vars$optional_random_effect
+    
+    # Clean up "null" strings
     if(is.null(re1) || re1 == 'null') re1 <- NULL
     if(is.null(re2) || re2 == 'null') re2 <- NULL
-    is_mixed_model <- !is.null(re1)
-    is_nested_model <- is_mixed_model && !is.null(re2)
+    
+    # --- FIXED LOGIC ---
+    # It' a mixed model if EITHER re1 or re2 exists
+    is_mixed_model <- !is.null(re1) || !is.null(re2)
+    
+    # It's a nested model only if BOTH exist
+    is_nested_model <- !is.null(re1) && !is.null(re2)
+    
     random_effect_vars <- c()
     if(!is.null(re1)) random_effect_vars <- c(random_effect_vars, re1)
     if(!is.null(re2)) random_effect_vars <- c(random_effect_vars, re2)
-    primary_re <- re1
-    structure_max <- if(is_nested_model) paste0(re1, "/", re2) else re1
+    
+    # Primary RE is re1 if it exists, otherwise it's re2
+    primary_re <- re1 %||% re2
+    
+    structure_max <- if(is_nested_model) {
+      paste0(re1, "/", re2) 
+    } else {
+      primary_re # Will be the single random effect available
+    }
   }
   
   # --- 2. Data Validation & UID Creation ---
@@ -1382,13 +1403,15 @@ run_statistical_model <- function(data_summary, config, response_variable) {
     if(!is.null(temp_fit)) {
       
       # --- ROUND 1: Structure ---
-      current_best_structure <- re1 
+      # CRITICAL FIX 1: Use primary_re instead of re1 as the baseline
+      current_best_structure <- primary_re 
       
       if(is_nested_model) {
         message("--- Round 1: Nested vs Simple Structure ---")
         interpretation_log <- c(interpretation_log, "--- Tournament Round 1: Random Effect Structure ---")
         
-        f_simple <- stats::as.formula(paste(fixed_effects_formula, "+ (1 |", re1, ")"))
+        # CRITICAL FIX 2: Use primary_re here as well
+        f_simple <- stats::as.formula(paste(fixed_effects_formula, "+ (1 |", primary_re, ")"))
         m_simple <- try(lmerTest::lmer(f_simple, data = model_data_clean, REML = FALSE, control = bobyqa_ctrl), silent=TRUE)
         
         f_nested <- stats::as.formula(paste(fixed_effects_formula, "+ (1 |", structure_max, ")"))
@@ -1411,8 +1434,9 @@ run_statistical_model <- function(data_summary, config, response_variable) {
         }
       } else {
         message("--- Round 1 Skipped: No nested structure detected ---")
-        interpretation_log <- c(interpretation_log, paste("Round 1 Skipped: Only simple random effect requested (", re1, ")."))
-      }
+        # CRITICAL FIX 3: Update the log message so it doesn't print a blank space if re1 is empty
+        interpretation_log <- c(interpretation_log, paste("Round 1 Skipped: Only simple random effect requested (", primary_re, ")."))
+      }      
       
       # --- ROUND 2: Slope vs Intercept ---
       message("--- Round 2: Random Slope vs Intercept ---")
@@ -2455,8 +2479,20 @@ build_label_columns <- function(data, baselines, config, extra_dfs = list()) {
   baselines <- apply_rename_primary(baselines)
   extra_dfs <- lapply(extra_dfs, apply_rename_primary)
   
+  # # ── Step 2: Calculate per-group average CAG baseline (for label templates) ── ####
+  # genotype_map <- baselines %>%
+  #   dplyr::group_by(!!sym_primary) %>%
+  #   dplyr::summarise(
+  #     avg_baseline = round(mean(final_baseline, na.rm = TRUE), 0),
+  #     .groups = "drop"
+  #   )
+  
   # ── Step 2: Calculate per-group average CAG baseline (for label templates) ──
-  genotype_map <- baselines %>%
+  # FIX: Calculate from 'data' instead of 'baselines'. If baselines are shared across 
+  # the primary variable (e.g., shared across treatments per starting_date), the 
+  # 'baselines' df will lack the primary_var column. 'data' has both.
+  genotype_map <- data %>%
+    dplyr::filter(!is.na(!!sym_primary)) %>%
     dplyr::group_by(!!sym_primary) %>%
     dplyr::summarise(
       avg_baseline = round(mean(final_baseline, na.rm = TRUE), 0),

@@ -36,15 +36,15 @@ invisible(lapply(packages, library, character.only = TRUE))
 
 # 0B. Load Functions ----
 #-------------------------#
-# if (!file.exists(here::here("functions.R"))) {
-#   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
-# }
-# source(here::here("functions.R"))
-
-if (!file.exists("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")) {
+if (!file.exists(here::here("functions.R"))) {
   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
 }
-source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
+source(here::here("functions.R"))
+
+# if (!file.exists("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")) {
+#   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
+# }
+# source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
 
 # 0C. Load Config & Logging ----
 if (!file.exists(here::here("config.yml"))) {
@@ -571,8 +571,7 @@ p_height_vs_mode <- ggplot(qc_plot_data, aes(x = mode, y = log10(target_peak_hei
   ggpubr::stat_cor(data = function(df) dplyr::filter(df, is_excluded == FALSE), 
                    aes(label = paste("R(good) =", ..r..)),
                    method = "pearson", label.x.npc = 0.05, label.y.npc = 0.95, color = "black", size = 3) +
-  ggpubr::stat_cor(data = function(df) dplyr::filter(df, is_excluded == TRUE), 
-                   aes(label = paste("R(excl) =", ..r..)),
+  ggpubr::stat_cor(aes(label = paste("R(overall) =", ..r..)),
                    method = "pearson", label.x.npc = 0.05, label.y.npc = 0.85, color = "red", size = 3) +
   scale_y_log_custom + 
   scale_shape_manual(values = c("TRUE" = 4, "FALSE" = 19), name = "Is Excluded") + 

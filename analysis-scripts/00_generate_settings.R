@@ -33,15 +33,15 @@ invisible(lapply(packages, library, character.only = TRUE))
 
 # 0B. Load Functions ----
 #-------------------------#
-# if (!file.exists(here::here("functions.R"))) {
-#   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
-# }
-# source(here::here("functions.R"))
-
-if (!file.exists("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")) {
+if (!file.exists(here::here("functions.R"))) {
   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
 }
-source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
+source(here::here("functions.R"))
+
+# if (!file.exists("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")) {
+#   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
+# }
+# source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
 
 # 0C. Load Config & Logging ----
 if (!file.exists(here::here("config.yml"))) {
@@ -51,12 +51,11 @@ config <- yaml::read_yaml(here::here("config.yml"))
 
 # Create output directory
 settings_output_dir <- here::here(paste0("3_settings_generation"))
-
 dir.create(settings_output_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Open Log
 try(logr::log_close(), silent = TRUE)
-log_path <- file.path(output_dir, "settings_log.log")
+log_path <- file.path(settings_output_dir, "settings_log.log")
 lf <- logr::log_open(log_path, show_notes = FALSE, logdir = FALSE)
 
 logr::log_print("--- SCRIPT 00: SETTINGS GENERATION INITIALIZED ---", console = TRUE)

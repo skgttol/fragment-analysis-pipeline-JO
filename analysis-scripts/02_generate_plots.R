@@ -99,9 +99,6 @@ if (!file.exists(rdata_path)) {
 load(rdata_path)
 print(paste("Data loaded successfully from:", rdata_path))
 
-# This loads all data, config, output_dir, palettes, etc.
-source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
-config <- yaml::read_yaml(here::here("config.yml"))
 # 2. NOW, (re)open the log file.
 try(logr::log_close(), silent = TRUE)
 log_path <- file.path(output_dir, "analysis_log.log") # output_dir is loaded from .RData
@@ -127,7 +124,7 @@ get_lbl <- function(style = "auto") {
   get_lbl_canonical(style = style, data = data_to_check, config = config)
 }
 
-logr::log_print(paste("Default plot label style:", config$parameters$active_label_style %||% "exploratory"))
+logr::log_print(paste("Default plot label style:", config$label_parameters$active_label_style %||% "exploratory"))
 
 #=============================================================================#
 # PART 1: GENERATE PLOTTING DATA, PALETTES, & SLOPE TABLE                  ####
@@ -185,7 +182,6 @@ if (exists("pseudo_clone_map") && has_pseudo_clones) {
       left_join(pseudo_clone_map, by = join_key)
   }
 }
-
 
 # --- NEW: GLOBAL VALUE RENAMING (e.g., FKO -> FAN1 KO) ---
 if ("value_renaming" %in% names(config) && length(config$value_renaming) > 0) {
@@ -299,7 +295,7 @@ logr::log_print(paste("Primary palette generated for:", cfg_vars$primary_group_v
 
 # --- 2. Secondary Palette (e.g., Treatment, Clone) ---
 secondary_palette <- NULL
-secondary_var <- cfg_vars$secondary_group_var
+secondary_var <- cfg_vars$secondary_group_var %||% cfg_vars$optional_grouping_var
 if (!is.null(secondary_var) && secondary_var != "null") {
   secondary_palette <- create_custom_palette(modeling_data, config, secondary_var)
   
@@ -393,7 +389,7 @@ for (resp_var in response_vars) {
     
     if (is_treatment_exp) {
       # --- TREATMENT STYLE PLOT ---
-      color_col <- config$key_variables$secondary_group_var # e.g., "treatment"
+      color_col <- config$key_variables$secondary_group_var %||% config$key_variables$optional_grouping_var %||% config$key_variables$primary_group_var  # e.g., "treatment"
       facet_vars <- list(rlang::sym(label_exp))
       if (is_crossed_model) facet_vars <- append(facet_vars, list(rlang::sym(re_cross)))
       
@@ -443,13 +439,15 @@ for (resp_var in response_vars) {
   label_exp <- get_lbl("exploratory")
   
   if (is_treatment_exp) {
-    color_col_string <- config$key_variables$secondary_group_var # "treatment"
+    color_col_string <- config$key_variables$secondary_group_var %||% label_exp # "treatment"
     facet_vars <- list(rlang::sym(label_exp))
     if (is_crossed_model) facet_vars <- append(facet_vars, list(rlang::sym(re_cross)))
   } else {
     color_col_string <- if(has_pseudo_clones) "clone_rank" else label_exp
     facet_vars <- list(rlang::sym(label_exp))
   }
+  
+  shape_var <- re_cross %||% config$key_variables$optional_grouping_var
   
   p_detail <- ggplot(
     data = modeling_data,
@@ -458,19 +456,19 @@ for (resp_var in response_vars) {
   
   # 1. Add Jitter Points (Raw Data)
   base_jitter_aes <- aes(y = !!sym(resp_var), color = !!sym(color_col_string))
-  final_jitter_aes <- create_plot_aes(base_jitter_aes, re_cross)
+  final_jitter_aes <- create_plot_aes(base_jitter_aes, shape_var)
   
   p_detail <- p_detail + geom_jitter(
-    data = dplyr::bind_rows(data_per_pcr, shared_baseline_pcr_points),
+    data = dplyr::bind_rows(data_per_pcr %>% dplyr::filter(!!sym(time_var) > 0), shared_baseline_pcr_points),
     mapping = final_jitter_aes,
     width = 0.15, alpha = 0.18, size = 1
-    )
+  )
   
   # 2. Add Mean Points (Bio-Reps)
   base_point_aes <- aes(y = !!sym(resp_var), color = !!sym(color_col_string))
-  final_point_aes <- create_plot_aes(base_point_aes, re_cross)
+  final_point_aes <- create_plot_aes(base_point_aes, shape_var)
   
-  p_detail <- p_detail + geom_point(
+    p_detail <- p_detail + geom_point(
     data = summary_per_rep,
     mapping = final_point_aes,
     alpha = 0.85, size = 2.5
@@ -1345,8 +1343,8 @@ for (current_resp_var in response_vars) {
   model_preds$conf.high <- as.numeric(as.character(model_preds$conf.high))
   
   if (is_treatment_exp) {
-    if("group" %in% names(model_preds)) model_preds <- model_preds %>% dplyr::rename(!!sym(cfg_vars$secondary_group_var) := group)
-    if("facet" %in% names(model_preds)) model_preds <- model_preds %>% dplyr::rename(!!sym(primary_var) := facet)
+    if("group" %in% names(model_preds)) model_preds <- model_preds %>% dplyr::rename(!!sym(cfg_vars$secondary_group_var %||% primary_var) := group)
+    if("facet" %in% names(model_preds) && !is.null(cfg_vars$secondary_group_var)) model_preds <- model_preds %>% dplyr::rename(!!sym(primary_var) := facet)
   } else {
     if("group" %in% names(model_preds)) model_preds <- model_preds %>% dplyr::rename(!!sym(primary_var) := group)
   }
@@ -1358,8 +1356,8 @@ for (current_resp_var in response_vars) {
     restore_all_factors()
   
   if (is_treatment_exp) {
-    color_col_preds <- cfg_vars$secondary_group_var 
-    facet_vars_preds <- list(rlang::sym(label_pub))
+    color_col_preds <- cfg_vars$secondary_group_var %||% label_pub
+    facet_vars_preds <- if(!is.null(cfg_vars$secondary_group_var)) list(rlang::sym(label_pub)) else list(rlang::sym(label_pub))
   } else {
     color_col_preds <- label_pub
     facet_vars_preds <- list(rlang::sym(label_pub))
@@ -1370,7 +1368,11 @@ for (current_resp_var in response_vars) {
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
   # 1. Safely determine variables and create clean labels for the legends
   shape_var_preds <- if (!is.null(rep_var) && rep_var != "null") rep_var else cfg_vars$secondary_group_var
-  clean_color_preds <- ifelse(color_col_preds %in% c("Genotype_Pub", "Genotype_Exp", "genotype"), "Genotype", stringr::str_to_title(color_col_preds))
+  clean_color_preds <- ifelse(
+    color_col_preds %in% c("Genotype_Pub", "Genotype_Exp", "genotype"), 
+    stringr::str_to_title(primary_var), 
+    stringr::str_to_title(color_col_preds)
+  )
   clean_shape_preds <- ifelse(shape_var_preds == "rep", "Replicate", stringr::str_to_title(shape_var_preds))
   
   plot_model_preds <- ggplot() +
@@ -1410,11 +1412,16 @@ for (current_resp_var in response_vars) {
   plot_database[[paste0("p_preds_", short_resp_var)]] <- combined_plot_1
   base::print(combined_plot_1)
   ggsave(file.path(var_plot_dir, paste0("01_preds_", short_resp_var, ".tiff")), combined_plot_1, width = if(is_treatment_exp) 12 else plot_width_1, height = 8, dpi = 300, compression = "lzw")  
+
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
   # PLOT 1A: Model Predictions
-  # (Clonal Means - One Point per Clone per Timepoint)
+  # (Clonal Means - One Point per Clone/Batch per Timepoint)
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
-  clone_grp_vars <- c(primary_var, cfg_vars$secondary_group_var, "time_binned")
+  # 1. Safely identify the variable representing the individual points (clones or batches)
+  point_group_var <- cfg_vars$secondary_group_var %||% cfg_vars$optional_grouping_var %||% cfg_vars$repeated_measure_var
+  
+  clone_grp_vars <- c(primary_var, "time_binned")
+  if (!is.null(point_group_var)) clone_grp_vars <- c(clone_grp_vars, point_group_var)
   if ("clone_rank" %in% names(modeling_data)) clone_grp_vars <- c(clone_grp_vars, "clone_rank")
   
   point_data_clones <- modeling_data %>%
@@ -1423,10 +1430,12 @@ for (current_resp_var in response_vars) {
     dplyr::summarise(!!rlang::sym(current_resp_var) := mean(!!rlang::sym(current_resp_var), na.rm = TRUE), .groups = "drop") %>%
     dplyr::left_join(label_lookup %>% dplyr::mutate(across(everything(), as.character)), by = primary_var) %>% restore_all_factors()
   
+  # 2. Determine the color mapping for the points safely
+  point_color_var <- if(exists("has_pseudo_clones") && has_pseudo_clones) "clone_rank" else color_col_preds
+  
   plot_model_1a <- ggplot() +
     geom_point(data = point_data_clones, 
-               aes(x = time_binned, y = !!sym(current_resp_var), color = !!sym(if(has_pseudo_clones) "clone_rank" else cfg_vars$secondary_group_var)), alpha = 0.7, size = 2.5)
-  
+               aes(x = time_binned, y = !!sym(current_resp_var), color = !!sym(point_color_var)), alpha = 0.7, size = 2.5)  
   if (!is_treatment_exp && !is.null(custom_palette)) {
     # If the custom table exists, hide this redundant dots legend
     show_clone_leg <- if(is_clone_style_analysis && !is.null(p_legend)) "none" else "legend"
@@ -1495,7 +1504,7 @@ for (current_resp_var in response_vars) {
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
   if (is_treatment_exp) {
     pred_terms_overall <- c(paste0(time_var, "[all]"), cfg_vars$secondary_group_var, primary_var)
-    color_col_overall <- cfg_vars$secondary_group_var
+    color_col_overall <- cfg_vars$secondary_group_var %||% label_pub
   } else {
     pred_terms_overall <- c(paste0(time_var, "[all]"), primary_var)
     color_col_overall <- label_pub
@@ -1533,7 +1542,7 @@ for (current_resp_var in response_vars) {
     }
 
     if (is_treatment_exp) {
-      if ("group" %in% names(model_preds_overall)) model_preds_overall <- model_preds_overall %>% dplyr::rename(!!sym(cfg_vars$secondary_group_var) := group)
+      if ("group" %in% names(model_preds_overall)) model_preds_overall <- model_preds_overall %>% dplyr::rename(!!sym(cfg_vars$secondary_group_var %||% primary_var) := group)
       if ("facet" %in% names(model_preds_overall)) model_preds_overall <- model_preds_overall %>% dplyr::rename(!!sym(primary_var) := facet)
     } else {
       if ("group" %in% names(model_preds_overall)) model_preds_overall <- model_preds_overall %>% dplyr::rename(!!sym(primary_var) := group)
@@ -1672,6 +1681,7 @@ for (current_resp_var in response_vars) {
     base::print(p_overall_2b)
     ggsave(file.path(var_plot_dir, paste0("02b_overall_", short_resp_var, ".tiff")), p_overall_2b, width = if(is_treatment_exp) 12 else 10, height = 7, dpi = 300, compression = "lzw")
   }  
+  
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
   # PLOT 3: Individual Clone Trends
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
@@ -1828,11 +1838,11 @@ for (current_resp_var in response_vars) {
   
   # --- 1. Define Variables based on Experiment Style ---
   if (is_treatment_exp) {
-    plot_x_var     <- cfg_vars$secondary_group_var # Treatment
+    plot_x_var     <- cfg_vars$secondary_group_var %||% label_pub
     plot_fill_var  <- label_pub
-    plot_facet_var <- label_pub                    # Facet by Genotype
-    batch_var      <- safe_batch_var               # Safe Fallback Variable
-    color_label    <- cfg_vars$secondary_group_var
+    plot_facet_var <- if(!is.null(cfg_vars$secondary_group_var)) label_pub else NULL
+    batch_var      <- safe_batch_var
+    color_label    <- cfg_vars$secondary_group_var %||% primary_var
   } else {
     plot_x_var     <- label_pub                    # Genotype
     plot_fill_var  <- label_pub
@@ -2015,7 +2025,6 @@ for (current_resp_var in response_vars) {
     
     file_name <- paste0("p_slopes_", type, "_", short_resp_var)
     plot_database[[file_name]] <- p
-    assign(paste0(file_name), p_rep_traj)
     base::print(p)
     ggsave(file.path(var_plot_dir, paste0("05_", file_name, ".tiff")), p, width = 12, height = 8, dpi = 300, compression = "lzw")
   }
@@ -2024,9 +2033,9 @@ for (current_resp_var in response_vars) {
   # PLOT 6: (QC) Slope Calculation Comparison
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
   if (is_treatment_exp) {
-    qc_x_var <- cfg_vars$secondary_group_var 
-    qc_facet_vars <- c(primary_var)
-    if (is_crossed_model) qc_facet_vars <- unique(c(qc_facet_vars, re_cross))
+    qc_x_var <- cfg_vars$secondary_group_var %||% primary_var
+    qc_facet_vars <- if(!is.null(cfg_vars$secondary_group_var)) c(primary_var) else NULL
+    if (is_crossed_model && !is.null(qc_facet_vars)) qc_facet_vars <- unique(c(qc_facet_vars, re_cross))
   } else {
     qc_x_var <- tail(fixed_effects_to_plot, 1); qc_facet_vars <- head(fixed_effects_to_plot, -1) 
   }
@@ -2202,20 +2211,22 @@ for (current_resp_var in response_vars) {
   
   slopes_data <- model_outputs$results_tables$Group_Expansion_Rates
   
-  # Safely pull control variables from the config (with fallbacks just in case)
+  # 1. Safely pull control variables (Fixing the baseline_treatment vs baseline_dose typo)
   fc_cfg <- config$parameters$fold_change_controls
-  ctrl_geno <- ifelse(!is.null(fc_cfg$baseline_genotype), fc_cfg$baseline_genotype, "WT")
-  ctrl_dose <- ifelse(!is.null(fc_cfg$baseline_dose), as.character(fc_cfg$baseline_dose), "0")
-
+  ctrl_geno <- fc_cfg$baseline_genotype %||% "WT"
+  ctrl_dose <- fc_cfg$baseline_treatment %||% fc_cfg$baseline_dose %||% "0"
+  
   if (!is.null(slopes_data) && nrow(slopes_data) > 0) {
     
     # --- 1. Determine Plotting Strategy Based on Experiment Type ---
     if (is_treatment_exp) {
-      plot_x_var    <- cfg_vars$secondary_group_var 
+      plot_x_var    <- cfg_vars$secondary_group_var %||% label_pub
       plot_fill_var <- label_pub                    
-      grouping_cols <- c(primary_var, plot_x_var)
-      methods_to_run <- c("genotype_matched", "global_absolute")
-      color_label <- cfg_vars$secondary_group_var
+      grouping_cols <- c(primary_var)
+      if(!is.null(cfg_vars$secondary_group_var)) grouping_cols <- c(grouping_cols, plot_x_var)
+      
+      methods_to_run <- if(!is.null(cfg_vars$secondary_group_var)) c("genotype_matched", "global_absolute") else c("clone_baseline")
+      color_label <- cfg_vars$secondary_group_var %||% primary_var
     } else {
       plot_x_var    <- label_pub
       plot_fill_var <- label_pub
@@ -2241,19 +2252,34 @@ for (current_resp_var in response_vars) {
         
         # Calculate Math based on the specific method
         if (method == "clone_baseline") {
-          logr::log_print(paste("......calculating clone baseline vs", ctrl_geno))
+          
+          # DYNAMIC FIX: If this is a 1D treatment exp, use the treatment control. Otherwise, use genotype control.
+          active_ctrl <- if (is_treatment_exp) as.character(ctrl_dose) else as.character(ctrl_geno)
+          
+          # Safety check for value_renaming (e.g. if '0' was renamed to 'Vehicle')
+          if (!is.null(config$value_renaming) && active_ctrl %in% names(config$value_renaming)) {
+            active_ctrl <- config$value_renaming[[active_ctrl]]
+          }
+          
+          logr::log_print(paste("......calculating baseline vs control:", active_ctrl))
           
           baseline_val <- overall_slopes %>% 
-            dplyr::filter(!!sym(primary_var) == ctrl_geno) %>% 
+            dplyr::filter(!!sym(primary_var) == active_ctrl) %>% 
             dplyr::summarise(Base = mean(Expansion_Rate, na.rm = TRUE)) %>% dplyr::pull(Base)
+          
+          # Safety escape if the control is missing
+          if (length(baseline_val) == 0 || is.na(baseline_val[1])) {
+            logr::log_print(paste("WARNING: Control group '", active_ctrl, "' not found in the data. Skipping fold change plot."))
+            next
+          }
           
           fc_math <- overall_slopes %>% 
             dplyr::group_by(dplyr::across(dplyr::any_of(grouping_cols))) %>% 
             dplyr::summarise(Mean = mean(Expansion_Rate, na.rm=TRUE), L = mean(CI_Lower_95, na.rm=TRUE), U = mean(CI_Upper_95, na.rm=TRUE), .groups="drop") %>%
             dplyr::mutate(ratio = Mean/baseline_val[1], CI_Lower_95 = L/baseline_val[1], CI_Upper_95 = U/baseline_val[1])
           
-          sub_text <- paste("Ratio relative to the", ctrl_geno, "average.")
-          file_suffix <- "vs_control_clone"
+          sub_text <- paste("Ratio relative to the", active_ctrl, "average.")
+          file_suffix <- "vs_control"
           
         } else if (method == "global_absolute") {
           logr::log_print(paste("......calculating global baseline vs", ctrl_geno, "at dose", ctrl_dose))
@@ -2401,7 +2427,7 @@ for (current_resp_var in response_vars) {
     logr::log_print(paste("...generating Waterfall plot for", current_resp_var))
     
     # Identify the column holding your clone names
-    clone_col <- cfg_vars$secondary_group_var 
+    clone_col <- cfg_vars$secondary_group_var %||% cfg_vars$optional_grouping_var
     
     wf_data <- model_outputs$results_tables$Individual_Slopes_BLUPs %>%
       dplyr::mutate(!!sym(primary_var) := as.character(!!sym(primary_var))) %>%
@@ -2432,7 +2458,7 @@ for (current_resp_var in response_vars) {
         subtitle = "Each bar is one clone/replicate ranked by its rate of change.",
         x        = NULL,
         y        = paste0("Rate of Change per ", stringr::str_to_title(config$key_variables$time_variable)),
-        fill     = stringr::str_to_title(color_var_wf)
+        fill     = stringr::str_to_title(primary_var)   # <--- CHANGED THIS LINE
       ) +
       scale_x_discrete(labels = clone_labels) +
       theme_publication(base_size = 14) +
@@ -2465,7 +2491,8 @@ for (current_resp_var in response_vars) {
     dplyr::left_join(label_lookup %>% mutate(across(everything(), as.character)), by = primary_var) %>%
     restore_all_factors()
   
-  color_var_rc <- if(is_treatment_exp) cfg_vars$secondary_group_var else label_pub
+  color_var_rc <- if(is_treatment_exp) cfg_vars$secondary_group_var %||% label_pub else label_pub
+  clean_color_rc <- ifelse(color_var_rc %in% c("Genotype_Pub", "Genotype_Exp"), primary_var, color_var_rc)
   
   p_raincloud <- ggplot(rc_data,
                         aes(x = Time_Factor, y = !!sym(current_resp_var),
@@ -2605,11 +2632,11 @@ if (!is.null(all_model_outputs[[var_x]]$results_tables$Individual_Slopes_BLUPs) 
   
   blup_x <- all_model_outputs[[var_x]]$results_tables$Individual_Slopes_BLUPs %>%
     dplyr::rename(Slope_X = Individual_Slope) %>%
-    dplyr::select(dplyr::any_of(c(primary_var, cfg_vars$secondary_group_var, re_cross, "Method")), Slope_X)
+    dplyr::select(dplyr::any_of(c(primary_var, cfg_vars$secondary_group_var, cfg_vars$optional_grouping_var, re_cross, "Method")), Slope_X)
   
   blup_y <- all_model_outputs[[var_y]]$results_tables$Individual_Slopes_BLUPs %>%
     dplyr::rename(Slope_Y = Individual_Slope) %>%
-    dplyr::select(dplyr::any_of(c(primary_var, cfg_vars$secondary_group_var, re_cross, "Method")), Slope_Y)
+    dplyr::select(dplyr::any_of(c(primary_var, cfg_vars$secondary_group_var, cfg_vars$optional_grouping_var, re_cross, "Method")), Slope_Y)
   
   # Join them together based on their shared grouping variables
   join_cols <- intersect(names(blup_x)[names(blup_x) != "Slope_X"], names(blup_y)[names(blup_y) != "Slope_Y"])
@@ -2619,9 +2646,8 @@ if (!is.null(all_model_outputs[[var_x]]$results_tables$Individual_Slopes_BLUPs) 
     restore_all_factors()
   
   if (nrow(corr_data) > 3) {
-    color_var_corr <- if(is_treatment_exp) cfg_vars$secondary_group_var else label_pub
-    color_var_label <- if(is_treatment_exp) cfg_vars$secondary_group_var else cfg_vars$primary_group_var
-    
+    color_var_corr <- if(is_treatment_exp) cfg_vars$secondary_group_var %||% label_pub else label_pub
+    color_var_label <- if(is_treatment_exp) cfg_vars$secondary_group_var %||% cfg_vars$primary_group_var else cfg_vars$primary_group_var    
     # Use pretty labels for axis titles if available
     label_x <- response_labels[["mode_change"]] %||% "Mode Change Slope"
     label_y <- response_labels[["instability_index"]] %||% "Instability Index Slope"

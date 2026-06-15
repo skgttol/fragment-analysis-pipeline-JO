@@ -29,6 +29,7 @@ auth_header <- c(Authorization = paste("Token", github_token))
 # Master list of all required scripts
 pipeline_scripts <- c(
   "functions.R",
+  "00_generate_settings.R",
   "01_process_data.R",
   "02_generate_plots.R",
   "03_correlation_analysis.R",
@@ -44,7 +45,8 @@ pipeline_scripts <- c(
 message("\n--- PHASE 1: COLLECTING SCRIPTS FROM GITHUB ---")
 
 # We will download these directly into your working directory
-script_dir <- here::here()
+script_dir <- here::here("R_Scripts")
+dir.create(script_dir, recursive = TRUE, showWarnings = FALSE)
 
 for (script in pipeline_scripts) {
   url <- paste0(github_base_url, script)
