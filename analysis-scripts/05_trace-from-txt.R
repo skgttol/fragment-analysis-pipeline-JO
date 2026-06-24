@@ -14,9 +14,10 @@ if (any(installed_packages == FALSE)) {
 }
 invisible(lapply(packages, library, character.only = TRUE))
 
-func_path <- "C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R"
-if (!file.exists(func_path)) stop("CRITICAL ERROR: 'functions.R' not found.")
-source(func_path)
+if (!file.exists(here::here("functions.R"))) {
+  stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
+}
+source(here::here("functions.R"))
 
 config <- yaml::read_yaml(here::here("config.yml"))
 
@@ -168,18 +169,40 @@ meta_clean <- processed_data %>%
 if (exists("excluded_data") && nrow(excluded_data) > 0) {
   meta_excl <- excluded_data %>%
     dplyr::select(any_of(c(cols_to_keep, "exclusion_reason"))) %>%
-    mutate(is_excluded = TRUE) %>%
-    mutate(!!sym(config$key_variables$time_variable) := as.numeric(!!sym(config$key_variables$time_variable)))
+    mutate(is_excluded = TRUE)
   
   common_cols <- intersect(names(meta_clean), names(meta_excl))
+  
+  # --- BULLETPROOF TYPE MATCHING ---
+  # Dynamically force meta_excl columns to match the exact data types of meta_clean
+  for (col in common_cols) {
+    target_class <- class(meta_clean[[col]])[1]
+    
+    if (target_class %in% c("numeric", "double", "integer")) {
+      meta_excl[[col]] <- suppressWarnings(as.numeric(meta_excl[[col]]))
+      
+    } else if (target_class == "character") {
+      meta_excl[[col]] <- as.character(meta_excl[[col]])
+      
+    } else if (target_class == "logical") {
+      meta_excl[[col]] <- as.logical(meta_excl[[col]])
+      
+    } else if (target_class == "factor") {
+      # Factors often crash bind_rows if levels don't match, so we safely cast both to text
+      meta_clean[[col]] <- as.character(meta_clean[[col]])
+      meta_excl[[col]] <- as.character(meta_excl[[col]])
+    }
+  }
+  # --------------------------------
+  
   all_metadata <- bind_rows(
     meta_clean %>% dplyr::select(any_of(common_cols)),
     meta_excl %>% dplyr::select(any_of(common_cols))
   )
+  
 } else {
   all_metadata <- meta_clean
 }
-
 all_metadata <- apply_renaming_and_factors(all_metadata, config)
 
 # --- ROBUST BIO_REP_ID CREATION ---
@@ -269,26 +292,29 @@ possible_rep_cols <- c("rep", "bio_rep", "replicate", "well_id", "clone_rep")
 found_rep_col <- intersect(possible_rep_cols, colnames(peaks_annotated))
 rep_col <- if(length(found_rep_col) > 0) found_rep_col[1] else NULL
 
-if (!is.null(rep_col)) {
-  # If a replicate column is found, combine bio_id and the replicate number
+# NEW: Check if the found replicate column was ALREADY used to make bio_id
+is_rep_in_bio_id <- !is.null(rep_col) && (rep_col %in% valid_id_cols)
+
+if (!is.null(rep_col) && !is_rep_in_bio_id) {
+  # If a replicate column is found AND it wasn't already included in bio_id, combine them
   peaks_annotated <- peaks_annotated %>% 
     tidyr::unite("bio_rep_id", dplyr::all_of(c("bio_id", rep_col)), sep = "_", remove = FALSE)
 } else {
-  # Fallback: If no replicate column exists in the metadata, just mirror bio_id
+  # Fallback: If no replicate column exists, OR if it is already inside bio_id, just mirror it
   peaks_annotated <- peaks_annotated %>% 
     dplyr::mutate(bio_rep_id = bio_id)
-}
-# Run after line 255 (second bio_rep_id creation)
+}# Run after line 255 (second bio_rep_id creation)
+
 dup_check <- peaks_annotated %>% 
   group_by(fsa_filename) %>% 
   dplyr::filter(n() > 1)
 cat("Duplicate fsa_filename rows:", nrow(dup_check), "\n")
-if(nrow(dup_check) > 0) print(head(dup_check %>% select(fsa_filename, bio_rep_id, pcr, everything())))
+if(nrow(dup_check) > 0) print(head(dup_check %>% dplyr::select(fsa_filename, bio_rep_id, pcr, everything())))
 
 # --- 3. Helper Functions ---
 triangulate_data <- function(df, width_cag = 0.4) {
   if(nrow(df) == 0) return(df)
-  bind_rows(df %>% mutate(CAG=CAG-width_cag, Height=0), df, df %>% mutate(CAG=CAG+width_cag, Height=0)) %>% arrange(CAG)
+  bind_rows(df %>% mutate(CAG=CAG-width_cag, Height=0), df, df %>% dplyr::mutate(CAG=CAG+width_cag, Height=0)) %>% arrange(CAG)
 }
 
 plot_modes <- list(list(name="Expanded", limits=limits_exp))
@@ -322,6 +348,8 @@ for (geno in unique_genos) {
     # OPEN PDF ONCE PER FILE
     pdf(file = fname, width = 8.5, height = 11)
     pb <- txtProgressBar(min = 0, max = length(unique_bioreps), style = 3, char = "=")
+    
+    unique_bioreps <- sort(unique_bioreps)
     
     for (i in seq_along(unique_bioreps)) {
       biorep <- unique_bioreps[i]
@@ -781,7 +809,7 @@ if(nrow(baseline_full_data) > 0) {
     )
   
   ggsave(file.path(overview_dir, "Genotype_Overview_Average.tiff"), p_avg_overview, width = 8, height = 10, compression = "lzw")
-  
+}
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
   # --- B. SINGLE REPLICATE SELECTION (Auto-Fallback or External Override) ---
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
@@ -793,6 +821,8 @@ if(nrow(baseline_full_data) > 0) {
   primary_var <- config$key_variables$primary_group_var
   time_var <- config$key_variables$time_variable
   
+  files_with_trace_data <- unique(optimized_data$fsa_filename)
+  
   # Check for external override file
   override_file_path <- file.path(analysis_base_dir, "representative_traces.csv")
   
@@ -800,35 +830,85 @@ if(nrow(baseline_full_data) > 0) {
     logr::log_print("Using external 'representative_traces.csv' for plot selection...", console=TRUE)
     manual_selection <- read.csv(override_file_path, stringsAsFactors = FALSE)
     
-    # Filter metadata to strictly match the rows provided in the CSV
     selected_meta <- peaks_annotated %>%
-      dplyr::filter(!is_excluded) %>%
+      dplyr::filter(
+        !is_excluded, 
+        fsa_filename %in% files_with_trace_data
+      ) %>%
       semi_join(manual_selection, by = intersect(colnames(manual_selection), colnames(peaks_annotated)))
     
   } else {
     logr::log_print("Auto-selecting 1st clone and target replicate for overview plots...", console=TRUE)
     
-    selected_meta <- peaks_annotated %>%
-      dplyr::filter(!is_excluded) %>%
-      group_by(!!sym(primary_var)) %>%
-      # 1. Sort clones alphabetically/factor-order, then reps numerically
-      arrange(!!sym(clone_var), as.numeric(as.character(!!sym(rep_var)))) %>%
-      # 2. Isolate just the FIRST clone for this genotype
+    # 1. Base clean dataset (valid traces, no missing metadata)
+    valid_meta <- peaks_annotated %>%
+      dplyr::filter(
+        !is_excluded,
+        fsa_filename %in% files_with_trace_data,
+        !is.na(!!sym(primary_var)),
+        !is.na(!!sym(clone_var)),
+        !is.na(mode),
+        !is.na(instability_index)
+      ) %>%
+      # Ensure time is numeric for min/max calculations
+      dplyr::mutate(!!sym(time_var) := as.numeric(as.character(!!sym(time_var))))
+    
+    # 2. NEW: Identify ONLY the bioreps that have both start and end data points
+    complete_bioreps <- valid_meta %>%
+      group_by(bio_id) %>%
+      dplyr::mutate(
+        geno_min_time = min(!!sym(time_var), na.rm = TRUE),
+        geno_max_time = max(!!sym(time_var), na.rm = TRUE)
+      ) %>%
+      # Keep only bio_reps that contain BOTH the min and max timepoint
+      dplyr::filter(
+        any(!!sym(time_var) == geno_min_time) & 
+          any(!!sym(time_var) == geno_max_time)
+      ) %>%
+      pull(bio_rep_id) %>%
+      unique()
+    
+    if(length(complete_bioreps) == 0) {
+      logr::log_print("WARNING: No replicates found with both start and end timepoints. Plots may be incomplete.")
+    }
+    
+    # 3. Apply the selection logic strictly to the complete bioreps
+    selected_meta <- valid_meta %>%
+      dplyr::filter(bio_rep_id %in% complete_bioreps) %>%
+      group_by(!!sym(primary_var), !!sym(clone_var)) %>%   # --- NEW: Calculate the "reach" of each clone ---
+      mutate(max_time_for_this_clone = max(!!sym(time_var), na.rm = TRUE)) %>%
+      group_by(!!sym(primary_var)) %>%  # Group by Genotype to pick the best representative
+      
+      # 1. Sort by: 
+      arrange(
+        desc(max_time_for_this_clone),       #    The latest end time (descending)
+        !!sym(clone_var),       #    Then alphabetical Clone Name (as a tie-breaker)
+        as.numeric(as.character(!!sym(rep_var)))      #    Then Replicate Number (numerically)
+
+      ) %>%
+      
+      # 2. Isolate the FIRST clone in this new sorted order
+      # (This will be the clone that reaches the furthest timepoint)
       dplyr::filter(!!sym(clone_var) == first(!!sym(clone_var))) %>%
-      # 3. Prefer target_rep_id; if missing, fall back to the first available rep (min)
-      dplyr::filter(if(any(!!sym(rep_var) == target_rep_id)) !!sym(rep_var) == target_rep_id else !!sym(rep_var) == first(!!sym(rep_var))) %>%
-      slice(1) %>% # Ensure absolutely only 1 row per genotype (unless external file used)
+      
+      # 3. Prefer target_rep_id (e.g., "1"); fall back to first available if missing
+      dplyr::filter(
+        if(any(!!sym(rep_var) == target_rep_id)) 
+          !!sym(rep_var) == target_rep_id 
+        else 
+          !!sym(rep_var) == first(!!sym(rep_var))
+      ) %>%
+      slice(1) %>% 
       ungroup()
-  }
   
-  # Extract the bio_rep_ids we selected (so we can track them across timepoints)
+  # Extract the bio_rep_ids we selected 
   target_bioreps <- unique(selected_meta$bio_rep_id)
   
-  # Create a Display Label (Genotype + Clone) just in case the external file specifies multiple clones per genotype
+  # Create a Display Label (Genotype + Clone)
   plot_data_reps <- optimized_data %>%
     left_join(peaks_annotated, by = "fsa_filename") %>%
-    dplyr::filter(bio_rep_id %in% target_bioreps) %>%
-    mutate(Display_Label = paste(!!sym(pub_label_col), "|", !!sym(clone_var)))
+    dplyr::filter(bio_rep_id %in% target_bioreps & !is_excluded) %>%
+    mutate(Display_Label = paste(!!sym(pub_label_col), "|", !!sym(clone_var))) 
   
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
   # --- C. BASELINE SPLIT PLOT (WT vs Expanded) ---
@@ -838,7 +918,7 @@ if(nrow(baseline_full_data) > 0) {
     dplyr::filter(!!sym(time_var) == min(!!sym(time_var), na.rm=TRUE))
   
   wt_lims <- c(10, 25)
-  exp_lims <- c(120, 160)
+  exp_lims <- c(105, 140)
   
   data_wt <- baseline_rep_data %>%
     dplyr::filter(CAG >= wt_lims[1] & CAG <= wt_lims[2]) %>%
@@ -896,9 +976,10 @@ if(nrow(baseline_full_data) > 0) {
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
   logr::log_print("  -> Generating Start vs End Representative Overlay...", console=TRUE)
   
-  start_end_overlay_data <- plot_data_reps %>%
+    start_end_overlay_data <- plot_data_reps %>%
     dplyr::filter(CAG >= exp_lims[1] & CAG <= exp_lims[2]) %>%
     # Filter for Min and Max timepoints
+    group_by(!!sym(primary_var),!!sym(secondary_var)) %>%
     dplyr::filter(!!sym(time_var) == min(!!sym(time_var), na.rm=TRUE) | 
                     !!sym(time_var) == max(!!sym(time_var), na.rm=TRUE)) %>%
     mutate(Timepoint_Label = ifelse(
@@ -914,7 +995,7 @@ if(nrow(baseline_full_data) > 0) {
     # Normalize height per file
     group_by(fsa_filename) %>%
     mutate(Norm_Height = Height / max(Height, na.rm = TRUE)) %>%
-    ungroup()
+    ungroup() 
   
   if(nrow(start_end_overlay_data) > 0) {
     p_rep_overlay <- ggplot(start_end_overlay_data, aes(x = CAG, y = Norm_Height)) +

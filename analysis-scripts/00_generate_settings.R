@@ -50,7 +50,7 @@ if (!file.exists(here::here("config.yml"))) {
 config <- yaml::read_yaml(here::here("config.yml"))
 
 # Create output directory
-settings_output_dir <- here::here(paste0("3_settings_generation"))
+settings_output_dir <- here::here(paste0("2a_settings_generation"))
 dir.create(settings_output_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Open Log

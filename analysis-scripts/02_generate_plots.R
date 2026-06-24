@@ -568,8 +568,111 @@ for (resp_var in response_vars) {
       compression = "lzw"
     )
   }
+  
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+  ## PLOT 4: Detailed View with All Individual PCRs (Faceted by Bio-Rep)
+  # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+  logr::log_print(paste("...generating detailed PCR-level replicate plots for", resp_var))
+  
+  # --- NEW: Create a nested folder specifically for these granular plots ---
+  pcr_plots_dir <- file.path(plots_dir, "PCR_Replicates")
+  dir.create(pcr_plots_dir, showWarnings = FALSE)
+  
+  label_exp <- get_lbl("exploratory")
+  sec_var <- config$key_variables$secondary_group_var
+  batch_var <- re_cross %||% config$key_variables$optional_grouping_var
+  
+  # 1. Determine Color Mapping
+  if (is_treatment_exp) {
+    color_col_string <- sec_var %||% label_exp
+  } else {
+    color_col_string <- if(exists("has_pseudo_clones") && has_pseudo_clones) "clone_rank" else (sec_var %||% label_exp)
+  }
+  
+  # 2. Prepare Data (Combine Day > 0 raw PCR data with Day 0 shared baselines)
+  plot_data_pcr <- dplyr::bind_rows(
+    data_per_pcr %>% dplyr::filter(!!sym(time_var) > 0),
+    shared_baseline_pcr_points
+  )
+  
+  # 3. Create a comprehensive Facet ID (Clone + Batch + Rep)
+  # This builds a string like "Clone: C1 | Batch: 1 | Rep: 1" dynamically
+  plot_data_pcr <- plot_data_pcr %>% dplyr::mutate(facet_id = "")
+  
+  if (!is.null(sec_var) && sec_var != "null" && sec_var %in% colnames(plot_data_pcr)) {
+    plot_data_pcr <- plot_data_pcr %>% 
+      dplyr::mutate(facet_id = paste0(facet_id, stringr::str_to_title(sec_var), ": ", !!sym(sec_var), " | "))
+  }
+  if (!is.null(batch_var) && batch_var != "null" && batch_var %in% colnames(plot_data_pcr)) {
+    plot_data_pcr <- plot_data_pcr %>% 
+      dplyr::mutate(facet_id = paste0(facet_id, stringr::str_to_title(batch_var), ": ", !!sym(batch_var), " | "))
+  }
+  
+  plot_data_pcr <- plot_data_pcr %>%
+    dplyr::mutate(facet_id = paste0(facet_id, "Rep: ", !!sym(rep_var))) %>%
+    dplyr::mutate(facet_id = factor(facet_id, levels = unique(facet_id)))
+  
+  # 4. Loop over the Primary Group (Genotype/Treatment) and generate ONE FILE PER GROUP
+  unique_groups <- unique(plot_data_pcr[[label_exp]])
+  
+  for (grp in unique_groups) {
+    # Subset data for this specific Genotype/Primary Group
+    sub_data <- plot_data_pcr %>% dplyr::filter(!!sym(label_exp) == grp)
+    
+    # Safety check: skip if no data exists
+    if (nrow(sub_data) == 0) next
+    
+    p_detail_rep <- ggplot(sub_data, aes(x = !!sym(time_var), y = !!sym(resp_var), color = !!sym(color_col_string))) +
+      
+      # Zero line for change-from-baseline variables
+      { if (grepl("change|_change", resp_var, ignore.case = TRUE)) geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50", linewidth = 0.5) } +
+      
+      # Individual PCR points
+      geom_jitter(aes(shape = as.factor(pcr)), width = 0.15, alpha = 0.7, size = 1.5) +
+      
+      # Linear trendline PER FACET (Draws line purely through the PCR points for this specific rep)
+      geom_smooth(method = "lm", se = TRUE, alpha = 0.15, linewidth = 1.1, aes(fill = !!sym(color_col_string))) +
+      
+      # Facet by the custom facet ID (One box per Rep per Clone)
+      facet_wrap(vars(facet_id), scales = y_scale_setting, axes = "all") +
+      
+      labs(
+        title = paste("PCR Replicate Details:", grp),
+        subtitle = "Each facet is one biological replicate. Points are individual PCRs. Line is the technical trend.",
+        x = stringr::str_to_title(time_var),
+        y = y_axis_label,
+        color = stringr::str_to_title(color_col_string),
+        fill  = stringr::str_to_title(color_col_string),
+        shape = "PCR"
+      ) +
+      theme_publication() +
+      
+      # Turn off the legend if the whole plot is exactly one color (e.g. 1D treatment)
+      theme(legend.position = if(color_col_string == label_exp) "none" else "right")
+    
+    # Apply standard pipeline colors
+    p_detail_rep <- apply_smart_palette(p_detail_rep, color_col_string)
+    
+    if (!is.null(x_breaks) && all(x_breaks != 'null')) {
+      p_detail_rep <- p_detail_rep + scale_x_continuous(breaks = as.numeric(x_breaks))
+    }
+    
+    # Safe filename formatting (converts weird characters to underscores)
+    safe_grp <- stringr::str_replace_all(as.character(grp), "[^A-Za-z0-9_\\-]", "_")
+    safe_grp <- stringr::str_replace_all(safe_grp, "_+", "_")
+    file_name <- paste0("02_detail_pcr_", safe_grp, "_", short_resp_var, ".tiff")
+    
+    # Print to Viewer & Save to the NEW Nested Folder
+    base::print(p_detail_rep)
+    ggsave(
+      file.path(pcr_plots_dir, file_name),  # <--- Now saving to the nested folder
+      p_detail_rep, width = 12, height = 8, dpi = 300, device = 'tiff', compression = "lzw"
+    )
+    
+    # Store in plot database
+    plot_database[[paste0("p_detail_pcr_", safe_grp, "_", short_resp_var)]] <- p_detail_rep
+  }
 }
-
 # --- 2B. (MODIFIED) Plate QC Heatmaps ---
 logr::log_print("...generating plate QC heatmaps (one plot per metric).")
 
@@ -730,6 +833,118 @@ if (is_crossed_model && !is.null(batch_var)) {
   ggsave(file.path(diagnostics_dir, "p_qc_rep_counts_bubble.tiff"), p_rep_counts_bubble, width = 18, height = 12, dpi = 300, compression = "lzw")
   plot_database[["p_qc_rep_counts_bubble"]] <- p_rep_counts_bubble
 }
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# PLOT 2D: PCR Technical Replicate QC (Control Sample & Global Variance)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+logr::log_print(paste("...generating PCR Technical QC plots for", resp_var))
+
+# Create a nested folder specifically for PCR variance
+pcr_qc_dir <- file.path(diagnostics_dir, "PCR_Variance")
+dir.create(pcr_qc_dir, showWarnings = FALSE)
+
+# 1. Identify the PCR column (from your config's sample_name_columns)
+pcr_col <- "pcr" 
+
+if (pcr_col %in% colnames(data_per_pcr)) {
+  
+  # ========================================================================= #
+  # PLOT A: THE UNIVERSAL CONTROL TRACKER
+  # ========================================================================= #
+  target_control_string <- "CTRL_125Q" # <-- CHANGE THIS to your actual control name
+  
+  control_data <- data_per_pcr %>%
+    dplyr::filter(
+      grepl(target_control_string, sample_name, ignore.case = TRUE) |
+        grepl(target_control_string, as.character(!!sym(primary_var)), ignore.case = TRUE)
+    )
+  
+  if (nrow(control_data) > 0) {
+    p_ctrl_qc <- ggplot(control_data, aes(x = plate_raw, y = !!sym(resp_var), 
+                                          color = as.factor(!!sym(pcr_col)), 
+                                          group = as.factor(!!sym(pcr_col)))) +
+      geom_line(alpha = 0.6, linewidth = 1.2) +
+      geom_point(size = 4, alpha = 0.9) +
+      scale_color_brewer(palette = "Dark2") +
+      labs(
+        title = paste("Inter-Plate Control Tracker:", y_axis_label),
+        subtitle = paste("Tracking universal control ('", target_control_string, "') to verify PCR/Plate consistency."),
+        x = "Plate Name",
+        y = y_axis_label,
+        color = "PCR Replicate"
+      ) +
+      theme_publication() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    base::print(p_ctrl_qc)
+    ggsave(file.path(pcr_qc_dir, paste0("01_qc_control_tracker_", short_resp_var, ".tiff")), 
+           p_ctrl_qc, width = 12, height = 6, dpi = 300, compression = "lzw")
+    plot_database[[paste0("p_qc_control_tracker_", short_resp_var)]] <- p_ctrl_qc
+  } else {
+    logr::log_print(paste("Notice: No control sample found matching '", target_control_string, "'."))
+  }
+  
+  # ========================================================================= #
+  # PLOT B: GLOBAL PCR CONSISTENCY SPREAD (Cross-Plate)
+  # ========================================================================= #
+  # 1. Dynamically gather everything that defines a unique biological sample
+  bio_grouping <- c(primary_var, cfg_vars$secondary_group_var, cfg_vars$optional_grouping_var, 
+                    time_var, rep_var, re_cross)
+  # Clean out nulls and ensure columns exist
+  bio_grouping <- unique(bio_grouping[!is.null(bio_grouping) & bio_grouping != "null" & bio_grouping %in% colnames(data_per_pcr)])
+  
+  # 2. Calculate the spread ACROSS the plates for each biological sample
+  pcr_variance <- data_per_pcr %>%
+    dplyr::group_by(dplyr::across(dplyr::all_of(bio_grouping))) %>%
+    dplyr::summarise(
+      n_pcrs = dplyr::n_distinct(!!sym(pcr_col)), 
+      pcr_spread = max(!!sym(resp_var), na.rm = TRUE) - min(!!sym(resp_var), na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::filter(n_pcrs > 1) 
+  
+  # 3. Plot the variance across Time, FACETED by Primary Variable
+  p_pcr_var <- ggplot(pcr_variance, aes(x = !!sym(time_var), y = pcr_spread, color = !!sym(primary_var))) +
+    
+    # Use a continuous X axis but jitter the points slightly so overlapping dots are visible
+    geom_jitter(width = 0.5, height = 0, alpha = 0.5, size = 1.5) +
+    
+    # Add a smoothed trendline to clearly show if variance is increasing/decreasing over time
+    geom_smooth(method = "loess", se = FALSE, linewidth = 1.2, alpha = 0.8) +
+    
+    # FACET by Genotype/Treatment to clean up the clutter
+    facet_wrap(vars(!!sym(primary_var)), scales = "fixed") +
+    
+    labs(
+      title = paste("Technical PCR Consistency per Sample:", y_axis_label),
+      subtitle = "Y-axis shows maximum difference between PCR replicates. Lines indicate variance trend over time.",
+      x = stringr::str_to_title(time_var),
+      y = paste("Max Delta across PCRs\n(Lower is better)"),
+      color = stringr::str_to_title(primary_var)
+    ) +
+    theme_publication() +
+    theme(
+      legend.position = "none", # Hide legend since facets act as the legend
+      panel.spacing = unit(1, "lines")
+    )
+  
+  # Apply standard colors
+  p_pcr_var <- apply_smart_palette(p_pcr_var, primary_var)
+  
+  # Ensure breaks exist if specified in config
+  if (!is.null(x_breaks) && all(x_breaks != 'null')) {
+    p_pcr_var <- p_pcr_var + scale_x_continuous(breaks = as.numeric(x_breaks))
+  }
+  
+  base::print(p_pcr_var)
+  ggsave(file.path(pcr_qc_dir, paste0("02_qc_global_pcr_spread_", short_resp_var, ".tiff")), 
+         p_pcr_var, width = 14, height = 8, dpi = 300, compression = "lzw")
+  plot_database[[paste0("p_qc_global_pcr_spread_", short_resp_var)]] <- p_pcr_var
+  
+} else {
+  logr::log_print("Skipping PCR Technical QC: 'pcr' column not found in data.")
+}
+
 #=============================================================================#
 # PART 3: PERFORM STATISTICAL MODELING (Main + QC)                        #####
 #=============================================================================#
@@ -2008,8 +2223,7 @@ for (current_resp_var in response_vars) {
         tip.length = 0.02
       )
   }
-  # --------------------------------------
-  
+
   p_slopes_avg <- p_slopes_avg +
     labs(title = paste("Averaged Expansion Rates:", y_axis_label),
          subtitle = "Aggregated group rates. Error bars show 95% CIs. Brackets show Tukey-adjusted LMER significance.",
