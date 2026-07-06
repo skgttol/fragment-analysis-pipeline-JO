@@ -13,17 +13,12 @@ if (!file.exists(here::here("config.yml"))) {
   stop("❌ CRITICAL ERROR: 'config.yml' not found. Please ensure your working directory is set correctly.")
 }
 
+FORCE_UPDATE_SCRIPTS <- FALSE
 # --- GITHUB REPOSITORY SETTINGS ---
 # Replace 'YOUR_USERNAME' and 'YOUR_REPO' with your actual GitHub details.
 # Ensure the branch name ('main' or 'master') is correct.
 github_base_url <- "https://raw.githubusercontent.com/skgttol/fragment-analysis-pipeline-JO/main/analysis-scripts/"
-
-# --- SECURITY TOKEN ---
-# Paste your GitHub Personal Access Token (PAT) here inside the quotes.
-# DO NOT upload this master script to GitHub!
 github_token <- "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"
-
-# Create the secret header R needs to unlock the private repo
 auth_header <- c(Authorization = paste("Token", github_token))
 
 # Master list of all required scripts
@@ -42,33 +37,38 @@ pipeline_scripts <- c(
 # =============================================================================
 # PHASE 1: COLLECT & VERIFY ALL SCRIPTS
 # =============================================================================
-message("\n--- PHASE 1: COLLECTING SCRIPTS FROM GITHUB ---")
-
-# We will download these directly into your working directory
-script_dir <- here::here("R_Scripts")
+script_dir <- here::here("analysis-scripts")
 dir.create(script_dir, recursive = TRUE, showWarnings = FALSE)
 
-for (script in pipeline_scripts) {
-  url <- paste0(github_base_url, script)
-  dest <- file.path(script_dir, script)
+# Check if any scripts are physically missing locally
+missing_locally <- any(!file.exists(file.path(script_dir, pipeline_scripts)))
+
+if (missing_locally || FORCE_UPDATE_SCRIPTS) {
+  message("\n--- PHASE 1: COLLECTING/UPDATING SCRIPTS FROM GITHUB ---")
   
-  message(sprintf("Downloading %s...", script))
-  
-  # Notice the 'headers = auth_header' addition here!
-  dl_status <- try(download.file(url, destfile = dest, mode = "w", 
-                                 headers = auth_header, quiet = TRUE), silent = TRUE)
-  
-  if (inherits(dl_status, "try-error") || dl_status != 0) {
-    stop(sprintf("\n❌ ERROR: Failed to download '%s'.\nCheck your internet, URL, or ensure your token hasn't expired.", script))
+  for (script in pipeline_scripts) {
+    url <- paste0(github_base_url, script)
+    dest <- file.path(script_dir, script)
+    
+    message(sprintf("Downloading %s...", script))
+    
+    dl_status <- try(download.file(url, destfile = dest, mode = "wb", # Changed to 'wb' to prevent Windows line break bugs
+                                   headers = auth_header, quiet = TRUE), silent = TRUE)
+    
+    if (inherits(dl_status, "try-error") || dl_status != 0) {
+      stop(sprintf("\n❌ ERROR: Failed to download '%s'.\nCheck your internet, URL, or ensure your token hasn't expired.", script))
+    }
   }
+  message("✅ Scripts updated and verified.\n")
+} else {
+  message("\n--- PHASE 1: SKIPPED DOWNLOAD (Using local script cache) ---")
 }
 
 # Final Physical Verification
 missing_scripts <- pipeline_scripts[!file.exists(file.path(script_dir, pipeline_scripts))]
 if (length(missing_scripts) > 0) {
-  stop(sprintf("\n❌ ERROR: The following scripts are missing after download attempt: %s", paste(missing_scripts, collapse = ", ")))
+  stop(sprintf("\n❌ ERROR: The following scripts are missing: %s", paste(missing_scripts, collapse = ", ")))
 }
-message("✅ All scripts securely downloaded and verified.\n")
 
 # =============================================================================
 # PHASE 2: EXECUTION ENGINE
@@ -115,10 +115,10 @@ message("=======================================================\n")
 # --- 00: Settings Generation ---
 if (RUN_00_SETTINGS) {
   tryCatch({
-    run_local_script("00_settings_generation.R")
+    run_local_script("00_generate_settings.R")
   }, error = function(e) stop(sprintf("\n❌ PIPELINE HALTED AT 00_settings_generation.R:\n%s", e$message), call. = FALSE))
 } else {
-  message("⏭️ SKIPPED: 00_settings_generation.R (Run-once setup)")
+  message("⏭️ SKIPPED: 00_generate_settings.R (Run-once setup)")
 }
 
 # --- 01: Process Data ---
