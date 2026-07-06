@@ -28,10 +28,6 @@
 
 # 0A. Load Libraries ----
 packages <- c("tidyverse", "readxl", "here", "openxlsx", "janitor", "yaml", "logr", "ggrepel", "ggpubr")
-installed_packages <- packages %in% rownames(utils::installed.packages())
-if (any(installed_packages == FALSE)) {
-  utils::install.packages(packages[!installed_packages])
-}
 invisible(lapply(packages, library, character.only = TRUE))
 
 # 0B. Load Functions ----
@@ -40,11 +36,6 @@ if (!file.exists(here::here("functions.R"))) {
   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
 }
 source(here::here("functions.R"))
-
-# if (!file.exists("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")) {
-#   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
-# }
-# source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
 
 # 0C. Load Config & Logging ----
 if (!file.exists(here::here("config.yml"))) {
@@ -69,14 +60,14 @@ logr::log_print(paste("Output will be saved to:", output_dir))
 
 
 #=============================================================================#
-# PART 1: VALIDATION & DATA LOADING
+# PART 1: VALIDATION & DATA LOADING ####
 #=============================================================================#
 
-# --- 1A. Validate Config & Check for External File ---
+## --- 1A. Validate Config & Check for External File ---####
 # We set check_external_files = TRUE because this script REQUIRES the data.
 validate_config(config, check_external_files = TRUE)
 
-# --- 1B. Load Platemap (Optional) ---
+## --- 1B. Load Platemap (Optional) ---####
 # We try to load the platemap to assist with patching missing sample names.
 # If FSA files aren't found locally, we skip the metadata link but still load the platemap file.
 platemap_data <- NULL
@@ -106,7 +97,7 @@ if (dir.exists(here::here(config$paths$fsa_folder)) &&
   })
 }
 
-# --- 1C. Load & Process External Data ---
+## --- 1C. Load & Process External Data ---####
 logr::log_print("\n--- Loading and Normalizing Sizing Data ---", console = TRUE)
 
 data_load_list <- load_and_process_data(config, platemap_data)
@@ -114,7 +105,7 @@ processed_data <- data_load_list$processed_data
 excluded_data <- data_load_list$excluded_data
 data_with_reasons <- data_load_list$pre_filter_data_with_reasons
 
-# --- 1D. Apply Factors ---
+## --- 1D. Apply Variable Factor Ordering ---####
 all_grouping_vars <- get_grouping_vars(config)
 
 processed_data <- apply_factor_levels(
@@ -124,7 +115,7 @@ processed_data <- apply_factor_levels(
 )
 
 #=============================================================================#
-# PART 2: NORMALIZATION
+# PART 2: NORMALIZATION TO BASELINE ####
 #=============================================================================#
 logr::log_print("\n--- Normalizing Data to Baseline ---", console = TRUE)
 
@@ -138,18 +129,8 @@ baselines_table <- normalization_list$baselines_table
 print(baselines_table)
 
 #=============================================================================#
-# PART 2B: BUILD DISPLAY LABELS & ENFORCE FACTOR ORDER
+# PART 2B: BUILD DISPLAY LABELS & ENFORCE FACTOR ORDER ####
 #=============================================================================#
-# build_label_columns() (defined in functions.R) is the SINGLE place that:
-#   1. Applies value_renaming to the primary grouping column FIRST
-#   2. Calculates average CAG baseline per group (for label templates)
-#   3. Determines display order (config factor_levels OR ascending CAG)
-#   4. Builds Genotype_Pub and Genotype_Exp factor columns in that order
-#   5. Re-levels the primary column itself to match
-#
-# By doing renaming BEFORE label construction, the display labels will always
-# contain the final human-readable name (e.g. "Wild-Type (140Q)") rather than
-# the internal code (e.g. "WT (140Q)").
 logr::log_print("Building display label columns and enforcing factor order...")
 
 label_result <- build_label_columns(
@@ -167,7 +148,7 @@ logr::log_print("Label columns created. Genotype map (in plot order):")
 print(genotype_map)
 
 #=============================================================================#
-# PART 3: SUMMARIZATION & OUTLIER DETECTION ----
+# PART 3: SUMMARIZATION & OUTLIER DETECTION ---- ####
 #=============================================================================#
 logr::log_print("\n--- Summarizing Data & Checking Outliers ---", console = TRUE)
 
@@ -200,7 +181,7 @@ summary_by_group <- label_result2$summary_by_group
 # baselines_table already correct from Part 2B; no need to reassign
 logr::log_print("Label columns propagated to all summary data frames.")
 
-# --- 3B. Visual Diagnostics (Outliers) ---
+# --- PART 3B. OUTLIER DETECTION ---####
 diagnostics_dir <- file.path(output_dir, "01_QC_plots")
 dir.create(diagnostics_dir, showWarnings = FALSE)
 
@@ -215,7 +196,6 @@ time_var <- cfg_vars$time_variable
 primary_var <- cfg_vars$primary_group_var
 secondary_var <- cfg_vars$secondary_group_var
 
-
 bio_outliers_list <- list()
 tech_outliers_list <- list()
 
@@ -226,7 +206,7 @@ for (current_var in response_vars) {
   y_axis_label <- response_labels[[current_var]] %||% stringr::str_to_title(current_var)
   short_resp_var <- response_shortnames[[current_var]] %||% current_var
   
-  # --- Plot 1: Biological Replicate Outliers ---
+  ## --- Plot 1: Biological Replicate Outliers ---####
   logr::log_print(paste("...generating biological outlier plot for", current_var))
   
   # Calculate IQR and Identify Outliers (Grouped by Genotype, Clone, Time)
@@ -311,7 +291,7 @@ for (current_var in response_vars) {
       dplyr::select(-Q1, -Q3, -IQR, -is_outlier)
   }
   
-  # --- Plot 2: Technical Replicate (PCR) Outliers ---
+  # --- Plot 2: Technical Replicate (PCR) Outliers ---####
   logr::log_print(paste("...generating technical outlier plot for", current_var))
   
   # Group by Bio-Rep (Genotype + Clone + Time + Rep) to find outlier PCRs
@@ -397,10 +377,10 @@ for (current_var in response_vars) {
 } # End of response variable loop
 
 #=============================================================================#
-# PART 4: PSEUDO-CLONES & PRE-EXCLUSION QC ---
+# PART 4: PSEUDO-CLONES & PRE-EXCLUSION QC ---####
 #=============================================================================#
 
-# --- 4A. Pseudo-Clone Mapping ---
+## --- 4A. Pseudo-Clone Mapping ---####
 
 # 1. Check Config Flag
 # Default to FALSE if missing to be safe
@@ -460,7 +440,7 @@ if (should_run_ranking) {
   }
 }
 
-# --- 4B. Pre-Exclusion QC Plots ---
+## --- 4B. Pre-Exclusion QC Plots ---####
 log_print("\n--- Starting PART 4B: Generating Pre-Exclusion QC Plots ---", console = TRUE)
 
 # --- FIX: Explicitly define variables from config to prevent missing object errors ---
@@ -633,7 +613,7 @@ ggsave(
 
 
 #=============================================================================#
-# PART 5: EXPORT DATA AND SAVE ENVIRONMENT
+# PART 5: EXPORT DATA AND SAVE ENVIRONMENT ####
 #=============================================================================#
 log_print("\n--- Starting PART 5: Exporting Data Tables ---", console = TRUE)
 
@@ -781,7 +761,6 @@ rdata_path <- file.path(output_dir, "processing_complete.RData")
 save.image(file = rdata_path) 
 log_print(paste("R environment saved to:", rdata_path))
 log_print("This file is required for 02_generate_plots.R")
-
 
 # --- Finalize ---
 log_print("\n--- SCRIPT 01: DATA PROCESSING FINISHED SUCCESSFULLY ---", console = TRUE)

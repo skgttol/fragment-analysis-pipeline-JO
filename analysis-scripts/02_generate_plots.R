@@ -37,11 +37,6 @@ packages <- c("tidyverse", "readxl", "here", "openxlsx", "broom.mixed",
               "ggpubr", "janitor", "yaml", "logr", "lme4", "lmerTest",
               "emmeans", "ggeffects", "patchwork", "gridExtra", "grid",
               "RColorBrewer", "gtable", "ggnewscale", "GGally", "reshape2", "MASS", "cowplot")
-# Install missing
-installed_packages <- packages %in% rownames(utils::installed.packages())
-if (any(installed_packages == FALSE)) {
-  utils::install.packages(packages[!installed_packages])
-}
 invisible(lapply(packages, library, character.only = TRUE))
 
 ## 0B. Load Functions ----
@@ -51,25 +46,12 @@ if (!file.exists(here::here("functions.R"))) {
 }
 source(here::here("functions.R"))
 
-# if (!file.exists("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")) {
-#   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
-# }
-# source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
-
 ## 0C. Load Configuration and Find Latest Data ----
 #--------------------------------------------------#
 if (!file.exists(here::here("config.yml"))) {
   stop("CRITICAL ERROR: 'config.yml' not found. Please create it before running.")
 }
-  config <- yaml::read_yaml(here::here("config.yml"))
-
-# --- DETERMINE EXPERIMENT STYLE (THE SWITCH) ---
-exp_style <- config$key_variables$experiment_style
-if (is.null(exp_style) || exp_style == 'null') {
-  exp_style <- "clone" # Fallback so older non-treatment configs never break
-}
-is_treatment_exp <- (exp_style == "treatment")
-logr::log_print(paste("Experiment Plotting Style set to:", stringr::str_to_title(exp_style)))
+config <- yaml::read_yaml(here::here("config.yml"))
 
 # --- 1. Bulletproof Latest Directory Search ---
 analysis_base_dir <- here::here(config$paths$output_dir_base)
@@ -95,9 +77,11 @@ if (!file.exists(rdata_path)) {
   stop("ERROR: 'processing_complete.RData' not found in:", latest_analysis_dir)
 }
 
-# 1. Load the saved environment from Script 01 FIRST.
+#Load the saved environment from Script 01 
 load(rdata_path)
 print(paste("Data loaded successfully from:", rdata_path))
+
+config <- yaml::read_yaml(here::here("config.yml")) # reload config file in case of updates
 
 # 2. NOW, (re)open the log file.
 try(logr::log_close(), silent = TRUE)
@@ -107,7 +91,17 @@ lf <- logr::log_open(log_path, show_notes = FALSE, logdir = FALSE) # Append
 logr::log_print("\n\n--- SCRIPT 02: MODELING & PLOTTING INITIALIZED ---", console = TRUE)
 logr::log_print("Log re-opened in append mode.")
 
-# --- (NEW) INITIALIZE PLOT DATABASE ---
+  
+# --- DETERMINE EXPERIMENT STYLE (THE SWITCH) ---
+exp_style <- config$key_variables$experiment_style
+if (is.null(exp_style) || exp_style == 'null') {
+  exp_style <- "clone" # Fallback so older non-treatment configs never break
+}
+is_treatment_exp <- (exp_style == "treatment")
+logr::log_print(paste("Experiment Plotting Style set to:", stringr::str_to_title(exp_style)))
+
+
+# --- INITIALIZE PLOT DATABASE ---
 # If plot_database doesn't exist from Script 01, create it.
 if (!exists("plot_database")) {
   plot_database <- list()
@@ -131,8 +125,7 @@ logr::log_print(paste("Default plot label style:", config$label_parameters$activ
 #=============================================================================#
 logr::log_print("\n--- Starting PART 1: Creating Plotting Data & Palettes ---", console = TRUE)
 
-# --- CRITICAL FIX: Ensure 'clone_rank' exists in all source data ---
-# We do this BEFORE creating baseline data so the rank propagates to modeling_data
+# --- Ensure 'clone_rank' exists in all source data ---
 if (exists("pseudo_clone_map") && has_pseudo_clones) {
   
   logr::log_print("...Patching missing 'clone_rank' into source dataframes.")
@@ -183,10 +176,9 @@ if (exists("pseudo_clone_map") && has_pseudo_clones) {
   }
 }
 
-# --- NEW: GLOBAL VALUE RENAMING (e.g., FKO -> FAN1 KO) ---
+# --- GLOBAL VALUE RENAMING (e.g., FKO -> FAN1 KO) ---
 if ("value_renaming" %in% names(config) && length(config$value_renaming) > 0) {
   logr::log_print("...Applying global value renaming from config.yml")
-  
   
   # Convert the config list to a named vector: c("Old" = "New")
   rename_map <- unlist(config$value_renaming)
@@ -229,7 +221,7 @@ if ("value_renaming" %in% names(config) && length(config$value_renaming) > 0) {
   if (exists("shared_baseline_pcr_points")) shared_baseline_pcr_points <- apply_renaming(shared_baseline_pcr_points)
 }
 
-# NEW: APPLY GLOBAL FACTOR LEVELS FROM CONFIG TO ALL DATAFRAMES 
+# APPLY GLOBAL FACTOR LEVELS FROM CONFIG TO ALL DATAFRAMES 
 if ("factor_levels" %in% names(config)) {
   logr::log_print("...Applying global factor levels from config.yml")
   
@@ -278,14 +270,14 @@ logr::log_print("Derived label columns synced to primary variable factor order."
 ## --- 1B. Define color variables and distinct palettes ----
 cfg_vars <- config$key_variables
 
-# (NEW) Define batch variable
+# Define batch variable
 re_cross <- cfg_vars$optional_crossed_effect
 is_crossed_model <- (!is.null(re_cross) && re_cross != 'null')
 if(is_crossed_model) {
   logr::log_print(paste("...Found crossed effect (e.g., batch):", re_cross, ". Will add as 'shape' to plots."))
 }
 
-# (NEW) Define rep variable
+# Define rep variable
 rep_var <- cfg_vars$optional_grouping_var %||% cfg_vars$repeated_measure_var
 if (is.null(rep_var) || rep_var == 'null') { rep_var <- "rep" }
 
@@ -673,7 +665,7 @@ for (resp_var in response_vars) {
     plot_database[[paste0("p_detail_pcr_", safe_grp, "_", short_resp_var)]] <- p_detail_rep
   }
 }
-# --- 2B. (MODIFIED) Plate QC Heatmaps ---
+# --- 2B. Plate QC Heatmaps ---
 logr::log_print("...generating plate QC heatmaps (one plot per metric).")
 
 # (NEW) Loop by RESPONSE VARIABLE first
@@ -698,7 +690,7 @@ for (current_resp_var in response_vars) {
     next # Skip to the next variable
   }
   
-  # (NEW) Call the heatmap function ONCE for this metric
+  # Call the heatmap function ONCE for this metric
   # This now uses 'plate_raw' and 'well_raw' from functions.R
   p_heatmap_metric <- generate_plate_heatmap(
     data_to_plot = data_per_pcr, # Pass ALL data
@@ -708,7 +700,7 @@ for (current_resp_var in response_vars) {
     val_limits = val_limits # Pass the scale limits
   )
   
-  # (NEW) DYNAMIC LAYOUT CALCULATION
+  # DYNAMIC LAYOUT CALCULATION
   n_plates <- length(unique(data_per_pcr$plate_raw)) # Use plate_raw for count
   plot_ncol_est <- ceiling(sqrt(n_plates))
   plot_nrow_est <- ceiling(n_plates / plot_ncol_est)
@@ -730,7 +722,7 @@ for (current_resp_var in response_vars) {
     dpi = 300, device = 'tiff',
     compression = "lzw"
   )
-} # --- End of new loop ---
+}
 
 #=============================================================================#
 # PART 2C: REPLICATION COUNT SUMMARY (Universal + Bubble)

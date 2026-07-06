@@ -25,10 +25,6 @@
 
 # 0A. Load Libraries ----
 packages <- c("tidyverse", "readxl", "here", "openxlsx", "janitor", "yaml", "logr")
-installed_packages <- packages %in% rownames(utils::installed.packages())
-if (any(installed_packages == FALSE)) {
-  utils::install.packages(packages[!installed_packages])
-}
 invisible(lapply(packages, library, character.only = TRUE))
 
 # 0B. Load Functions ----
@@ -38,11 +34,6 @@ if (!file.exists(here::here("functions.R"))) {
 }
 source(here::here("functions.R"))
 
-# if (!file.exists("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")) {
-#   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
-# }
-# source("C:/Users/skgttol/OneDrive - University College London/PhD/PhD_Thesis/02_Data/Template_RScripts/CAGsizing_Flexible/functions.R")
-
 # 0C. Load Config & Logging ----
 if (!file.exists(here::here("config.yml"))) {
   stop("CRITICAL ERROR: 'config.yml' not found.")
@@ -50,12 +41,12 @@ if (!file.exists(here::here("config.yml"))) {
 config <- yaml::read_yaml(here::here("config.yml"))
 
 # Create output directory
-settings_output_dir <- here::here(paste0("2a_settings_generation"))
-dir.create(settings_output_dir, recursive = TRUE, showWarnings = FALSE)
+settings_dir <- here::here(paste0("2a_romeo_settings"))
+dir.create(settings_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Open Log
 try(logr::log_close(), silent = TRUE)
-log_path <- file.path(settings_output_dir, "settings_log.log")
+log_path <- file.path(settings_dir, "settings_log.log")
 lf <- logr::log_open(log_path, show_notes = FALSE, logdir = FALSE)
 
 logr::log_print("--- SCRIPT 00: SETTINGS GENERATION INITIALIZED ---", console = TRUE)
@@ -63,7 +54,6 @@ logr::log_print("--- SCRIPT 00: SETTINGS GENERATION INITIALIZED ---", console = 
 # --- VALIDATION ---
 # Check inputs, but FALSE for check_external_files (since we haven't made it yet)
 validate_config(config, check_external_files = FALSE)
-
 
 #=============================================================================#
 # PART 1: LOAD PLATEMAP & FSA METADATA
@@ -99,7 +89,6 @@ if (nrow(unmatched_samples) > 0) {
   logr::log_print("All platemap samples successfully matched to FSA files.")
 }
 
-
 #=============================================================================#
 # PART 2: GENERATE SETTINGS FILE
 #=============================================================================#
@@ -108,7 +97,7 @@ logr::log_print("\n--- Generating Settings File ---", console = TRUE)
 settings_file <- generate_custom_settings_file(
   platemap_data = platemap_data,
   config = config,
-  output_dir = settings_output_dir
+  output_dir = settings_dir
 )
 
 if (!is.null(settings_file)) {
