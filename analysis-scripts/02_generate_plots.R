@@ -306,10 +306,6 @@ if (!is.null(secondary_var) && secondary_var != "null") {
 custom_palette <- NULL
 p_legend <- NULL 
 
-# --- 3. Rank-Based Palette & Legend (For Pseudo-Clones) ---
-custom_palette <- NULL
-p_legend <- NULL 
-
 if (has_pseudo_clones) {
   logr::log_print("Creating rank-based color palette for clones.")
   max_rank <- max(as.numeric(levels(droplevels(pseudo_clone_map$clone_rank))))
@@ -398,8 +394,8 @@ for (resp_var in response_vars) {
       
     } else {
       # ---  CLONE STYLE PLOT ---
-      color_col <- label_exp
-      facet_vars <- list(rlang::sym(label_exp))
+      color_col <- primary_var
+      facet_vars <- list(rlang::sym(primary_var))
       plot_title <- paste("Group Averages & Trendline:", y_axis_label)
       plot_sub <- "Lines are linear model fits. Points are group means +/- SEM."
     }
@@ -443,8 +439,8 @@ for (resp_var in response_vars) {
     facet_vars <- list(rlang::sym(label_exp))
     if (is_crossed_model) facet_vars <- append(facet_vars, list(rlang::sym(re_cross)))
   } else {
-    color_col_string <- if(has_pseudo_clones) "clone_rank" else label_exp
-    facet_vars <- list(rlang::sym(label_exp))
+    color_col_string <- if(has_pseudo_clones) "clone_rank" else primary_var
+    facet_vars <- list(rlang::sym(primary_var))
   }
   
   shape_var <- re_cross %||% config$key_variables$optional_grouping_var
@@ -586,7 +582,7 @@ for (resp_var in response_vars) {
   if (is_treatment_exp) {
     color_col_string <- sec_var %||% label_exp
   } else {
-    color_col_string <- if(exists("has_pseudo_clones") && has_pseudo_clones) "clone_rank" else (sec_var %||% label_exp)
+    color_col_string <- if(exists("has_pseudo_clones") && has_pseudo_clones) "clone_rank" else (sec_var %||% primary_var)
   }
   
   # 2. Prepare Data (Combine Day > 0 raw PCR data with Day 0 shared baselines)
