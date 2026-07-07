@@ -1935,7 +1935,7 @@ create_custom_palette <- function(data, config, group_var) {
     # 3. Choose Auto-Palette based on remaining count
     if (n_unassigned <= 4) {
       # Okabe-Ito High Contrast Palette (Colorblind safe)
-      auto_colors <- c("#0072B2", "#CC79A7", "#F0E442", "#009E73", "#D55E00", "#000000")
+      auto_colors <- c("#0072B2", "#CC79A7", "#F0E442", "#009E73", "#D55E00", "#000000", "#7570B3", "#A6761D")
       # Filter out colors already used manually
       auto_colors <- setdiff(auto_colors, unlist(manual_colors))
       selected_colors <- auto_colors[1:n_unassigned]

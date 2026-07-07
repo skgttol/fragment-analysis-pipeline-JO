@@ -13,32 +13,34 @@ if (!file.exists(here::here("config.yml"))) {
   stop("❌ CRITICAL ERROR: 'config.yml' not found. Please ensure your working directory is set correctly.")
 }
 
-FORCE_UPDATE_SCRIPTS <- FALSE
+FORCE_UPDATE_SCRIPTS <- TRUE
 # --- GITHUB REPOSITORY SETTINGS ---
 # Replace 'YOUR_USERNAME' and 'YOUR_REPO' with your actual GitHub details.
 # Ensure the branch name ('main' or 'master') is correct.
-github_base_url <- "https://raw.githubusercontent.com/skgttol/fragment-analysis-pipeline-JO/main/analysis-scripts/"
+github_base_url <- "https://raw.githubusercontent.com/skgttol/fragment-analysis-pipeline-JO/main/"
 github_token <- "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"
 auth_header <- c(Authorization = paste("Token", github_token))
 
 # Master list of all required scripts
 pipeline_scripts <- c(
   "functions.R",
-  "00_generate_settings.R",
-  "01_process_data.R",
-  "02_generate_plots.R",
-  "03_correlation_analysis.R",
-  "04_figure_generation.R",
-  "05_trace-from-txt.R",
-  "06_render_html.R",
+  "analysis-scripts/00_generate_settings.R",
+  "analysis-scripts/01_process_data.R",
+  "analysis-scripts/02_generate_plots.R",
+  "analysis-scripts/03_correlation_analysis.R",
+  "analysis-scripts/04_figure_generation.R",
+  "analysis-scripts/05_trace-from-txt.R",
+  "analysis-scripts/06_render_html.R",
   "Fragment_Analysis_Report.Rmd"
 )
 
 # =============================================================================
 # PHASE 1: COLLECT & VERIFY ALL SCRIPTS
 # =============================================================================
+github_script_dir <- here::here()
+dir.create(github_script_dir, recursive = TRUE, showWarnings = FALSE)
+
 script_dir <- here::here("analysis-scripts")
-dir.create(script_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Check if any scripts are physically missing locally
 missing_locally <- any(!file.exists(file.path(script_dir, pipeline_scripts)))
@@ -48,7 +50,7 @@ if (missing_locally || FORCE_UPDATE_SCRIPTS) {
   
   for (script in pipeline_scripts) {
     url <- paste0(github_base_url, script)
-    dest <- file.path(script_dir, script)
+    dest <- file.path(github_script_dir, script)
     
     message(sprintf("Downloading %s...", script))
     
@@ -62,12 +64,6 @@ if (missing_locally || FORCE_UPDATE_SCRIPTS) {
   message("✅ Scripts updated and verified.\n")
 } else {
   message("\n--- PHASE 1: SKIPPED DOWNLOAD (Using local script cache) ---")
-}
-
-# Final Physical Verification
-missing_scripts <- pipeline_scripts[!file.exists(file.path(script_dir, pipeline_scripts))]
-if (length(missing_scripts) > 0) {
-  stop(sprintf("\n❌ ERROR: The following scripts are missing: %s", paste(missing_scripts, collapse = ", ")))
 }
 
 # =============================================================================
@@ -93,7 +89,7 @@ run_local_script <- function(script_name) {
 # =============================================================================
 
 # [Setup] Usually run only once per project to generate the initial settings
-RUN_00_SETTINGS    <- FALSE  
+RUN_00_SETTINGS    <- TRUE  
 
 # [Core Pipeline]
 RUN_01_PROCESS     <- TRUE   # Data Processing & QC
