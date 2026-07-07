@@ -294,10 +294,17 @@ if (!is.null(secondary_var) && secondary_var != "null") {
   # Fallback: If no color mapping in config, assign Set2 to secondary groups
   if (is.null(config$color_mapping) && length(secondary_palette) > 0) {
     n_sec_levels <- length(secondary_palette)
-    secondary_palette[] <- RColorBrewer::brewer.pal(max(3, n_sec_levels), "Set2")[1:n_sec_levels]
+    
+    # FIXED: Interpolate Set2 safely to prevent the "n too large" crash
+    safe_set2_base <- RColorBrewer::brewer.pal(8, "Set2")
+    secondary_palette[] <- grDevices::colorRampPalette(safe_set2_base)(n_sec_levels)
   }
   logr::log_print(paste("Secondary palette generated for:", secondary_var))
 }
+
+# --- 3. Rank-Based Palette & Legend (For Pseudo-Clones) ---
+custom_palette <- NULL
+p_legend <- NULL 
 
 # --- 3. Rank-Based Palette & Legend (For Pseudo-Clones) ---
 custom_palette <- NULL
@@ -309,8 +316,9 @@ if (has_pseudo_clones) {
   n_colors_to_request <- max(3, min(9, max_rank))
   base_palette <- RColorBrewer::brewer.pal(n_colors_to_request, "Set1")
   
+  # FIXED: Interpolate rather than recycle
   if (max_rank > length(base_palette)) {
-    final_rank_palette <- rep(base_palette, length.out = max_rank)
+    final_rank_palette <- grDevices::colorRampPalette(base_palette)(max_rank)
   } else {
     final_rank_palette <- base_palette[1:max_rank]
   }
