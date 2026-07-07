@@ -43,7 +43,7 @@ dir.create(github_script_dir, recursive = TRUE, showWarnings = FALSE)
 script_dir <- here::here("analysis-scripts")
 
 # Check if any scripts are physically missing locally
-missing_locally <- any(!file.exists(file.path(script_dir, pipeline_scripts)))
+missing_locally <- any(!file.exists(file.path(github_script_dir, pipeline_scripts)))
 
 if (missing_locally || FORCE_UPDATE_SCRIPTS) {
   message("\n--- PHASE 1: COLLECTING/UPDATING SCRIPTS FROM GITHUB ---")

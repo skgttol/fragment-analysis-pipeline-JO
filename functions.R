@@ -1933,21 +1933,30 @@ create_custom_palette <- function(data, config, group_var) {
   
   if (n_unassigned > 0) {
     # 3. Choose Auto-Palette based on remaining count
-    if (n_unassigned <= 4) {
-      # Okabe-Ito High Contrast Palette (Colorblind safe)
-      auto_colors <- c("#0072B2", "#CC79A7", "#F0E442", "#009E73", "#D55E00", "#000000", "#7570B3", "#A6761D")
-      # Filter out colors already used manually
-      auto_colors <- setdiff(auto_colors, unlist(manual_colors))
-      selected_colors <- auto_colors[1:n_unassigned]
+    auto_colors <- c("#0072B2", "#CC79A7", "#F0E442", "#009E73", "#D55E00", "#000000", "#7570B3", "#A6761D")
+    std_colors <- c(
+      "#0072B2", "#CC79A7", "#009E73", "#F0E442", "#56B4E9",
+      "#E69F00", "#000000", "#7570B3", "#E7298A", "#66A61E", "#E6AB02",
+      "#A6761D", "#666666", "#1B9E77", "#D95F02", "#D55E00"
+    )
+    
+    base_set <- if (n_unassigned <= 4) auto_colors else std_colors
+    
+    # Filter out colors already used manually
+    if (!is.null(manual_colors)) {
+      base_set <- setdiff(base_set, unlist(manual_colors))
+    }
+    
+    # Safety Net: If manual colors consumed the entire base set
+    if (length(base_set) == 0) {
+      base_set <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd")
+    }
+    
+    # INTERPOLATION FIX: Dynamically stretch the palette if we need more colors than exist
+    if (n_unassigned > length(base_set)) {
+      selected_colors <- grDevices::colorRampPalette(base_set)(n_unassigned)
     } else {
-      # Extended Standard Palette
-      std_colors <- c(
-        "#0072B2", "#CC79A7", "#009E73", "#F0E442", "#56B4E9",
-        "#E69F00", "#000000", "#7570B3", "#E7298A", "#66A61E", "#E6AB02",
-        "#A6761D", "#666666", "#1B9E77", "#D95F02", "#D55E00"
-      )
-      std_colors <- setdiff(std_colors, unlist(manual_colors))
-      selected_colors <- rep_len(std_colors, n_unassigned)
+      selected_colors <- base_set[1:n_unassigned]
     }
     
     # Assign them
