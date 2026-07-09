@@ -36,7 +36,12 @@
 packages <- c("tidyverse", "readxl", "here", "openxlsx", "broom.mixed",
               "ggpubr", "janitor", "yaml", "logr", "lme4", "lmerTest",
               "emmeans", "ggeffects", "patchwork", "gridExtra", "grid",
-              "RColorBrewer", "gtable", "ggnewscale", "GGally", "reshape2", "MASS", "cowplot")
+              "RColorBrewer", "gtable", "ggnewscale", "GGally", "reshape2", "MASS", "cowplot", "Matrix")
+installed_packages <- packages %in% rownames(utils::installed.packages())
+if (any(installed_packages == FALSE)) {
+  utils::install.packages(packages[!installed_packages])
+}
+
 invisible(lapply(packages, library, character.only = TRUE))
 
 ## 0B. Load Functions ----
@@ -3099,6 +3104,7 @@ for (var_name in names(all_model_outputs)) {
   }
 }
 # --- Save RData for Script 03 ---
+rm(latest_analysis_dir)
 rdata_path <- file.path(output_dir, "processing_complete.RData")
 save.image(file = rdata_path)
 logr::log_print(paste("R environment with all plot objects saved to:", rdata_path))

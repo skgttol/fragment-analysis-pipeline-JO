@@ -28,6 +28,11 @@
 
 # 0A. Load Libraries ----
 packages <- c("tidyverse", "readxl", "here", "openxlsx", "janitor", "yaml", "logr", "ggrepel", "ggpubr")
+installed_packages <- packages %in% rownames(utils::installed.packages())
+if (any(installed_packages == FALSE)) {
+  utils::install.packages(packages[!installed_packages])
+}
+
 invisible(lapply(packages, library, character.only = TRUE))
 
 # 0B. Load Functions ----
@@ -757,6 +762,7 @@ label_lookup <- genotype_map %>%
   dplyr::distinct()
 
 # --- Save Final Environment ---
+rm(latest_analysis_dir)
 rdata_path <- file.path(output_dir, "processing_complete.RData")
 save.image(file = rdata_path) 
 log_print(paste("R environment saved to:", rdata_path))
