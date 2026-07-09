@@ -10,15 +10,9 @@ github_owner <- "skgttol"
 github_repo  <- "fragment-analysis-pipeline-JO"
 github_repo_full <- paste0(github_owner, "/", github_repo) # "Owner/Repo"
 
-github_token <- "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"
-Sys.setenv(GITHUB_PAT = github_token)
-
 # Define the direct zip source and target locations
 zip_url   <- sprintf("https://github.com/%s/%s/archive/refs/heads/main.zip", github_owner, github_repo)
 temp_zip  <- tempfile(fileext = ".zip")
-
-# Standardized token authentication header (matching your working version)
-auth_header <- c(Authorization = paste("Token", github_token))
 
 # Ensure usethis is installed
 if (!requireNamespace("usethis", quietly = TRUE)) {
@@ -32,8 +26,60 @@ if (!requireNamespace("rstudioapi", quietly = TRUE)) {
   install.packages("rstudioapi", type = "binary")
 }
 
+# ==============================================================================
+# STEP 1: CONSOLIDATED PACKAGE INSTALLATION & CRAN BINARY FALLBACK
+# ==============================================================================
+message("\n--- PHASE 2: INITIALIZING PIPELINE PACKAGES ---")
+
+# 1. Dynamically check R version to determine the best repository
+current_r_version <- getRversion()
+
+if (current_r_version < "4.4.0") {
+  message(sprintf("Detected R version %s. Routing to Posit Package Manager for compatible binaries...", current_r_version))
+  options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
+} else {
+  message(sprintf("Detected R version %s. Using default CRAN repository...", current_r_version))
+  # Ensures a default repo is set so the script doesn't hang on a fresh install
+  if (is.null(getOption("repos")) || getOption("repos")["CRAN"] == "@CRAN@") {
+    options(repos = c(CRAN = "https://cloud.r-project.org"))
+  }
+}
+
+# Comprehensive master package list across all scripts
+required_pkgs <- c(
+  "boot", "broom", "broom.mixed", "cowplot", "data.table", "datawizard", 
+  "dendextend", "emmeans", "future", "GGally", "ggeffects", "ggh4x", 
+  "ggnewscale", "ggplot2", "ggpubr", "ggrepel", "ggridges", "ggstats", 
+  "grid", "gridExtra", "gtable", "here", "htmltools", "insight", 
+  "janitor", "kableExtra", "knitr", "lme4", "lmerTest", "logr", "magick", "Matrix",
+  "MASS", "openxlsx", "patchwork", "plotly", "ragg", "RColorBrewer", 
+  "readxl", "reshape2", "rmarkdown", "scales", "segmented", "tidyverse", 
+  "writexl", "yaml"
+)
+
+# Identify uninstalled packages
+missing_pkgs <- required_pkgs[!(required_pkgs %in% installed.packages()[, "Package"])]
+
+if (length(missing_pkgs) > 0) {
+  # Dynamically check for any version of Rtools environment setups
+  has_rtools <- any(grepl("RTOOLS", names(Sys.getenv()))) || nzchar(Sys.which("make"))
+  
+  if (has_rtools) {
+    message("Rtools detected. Installing missing analysis packages...")
+    install.packages(missing_pkgs)
+  } else {
+    message("Rtools NOT found. Installing pre-compiled binaries...")
+    install.packages(missing_pkgs, type = getOption("pkgType")) 
+  }
+} else {
+  message("✅ All required pipelines and dependencies are successfully installed.")
+}
+
+# Load packages cleanly into memory
+invisible(lapply(required_pkgs, library, character.only = TRUE))
+
 # ============================================================================== 
-# STEP 1 & 2: INTERACTIVE POPUPS FOR LOCATION AND PROJECT NAME
+# STEP 2: INTERACTIVE POPUPS FOR LOCATION AND PROJECT NAME
 # ============================================================================== 
 message("Waiting for user input...")
 
@@ -98,7 +144,6 @@ if (is_empty || force_update_scripts) {
       url = zip_url, 
       destfile = temp_zip, 
       mode = "wb",          # Prevents zip file corruption on Windows
-      headers = auth_header, 
       quiet = TRUE
     )
     
@@ -121,7 +166,7 @@ if (is_empty || force_update_scripts) {
       unlink(expected_wrapper, recursive = TRUE)
       unlink(temp_zip)
 
-      message("✅ All private script trees and templates deployed successfully.")
+      message("✅ Alls cript trees and templates deployed successfully.")
     } else {
       stop("Extraction structure mismatch. Expected branch folder not found.")
     }
@@ -135,60 +180,6 @@ if (is_empty || force_update_scripts) {
   message("--> Project already populated. Skipping download. (Set force_update_scripts <- TRUE to update)")
 }
 
-# ==============================================================================
-# STEP 4.5: CONSOLIDATED PACKAGE INSTALLATION & CRAN BINARY FALLBACK
-# ==============================================================================
-message("\n--- PHASE 2: INITIALIZING PIPELINE PACKAGES ---")
-
-# 1. Dynamically check R version to determine the best repository
-current_r_version <- getRversion()
-
-if (current_r_version < "4.4.0") {
-  message(sprintf("Detected R version %s. Routing to Posit Package Manager for compatible binaries...", current_r_version))
-  options(repos = c(CRAN = "https://packagemanager.posit.co/cran/latest"))
-} else {
-  message(sprintf("Detected R version %s. Using default CRAN repository...", current_r_version))
-  # Ensures a default repo is set so the script doesn't hang on a fresh install
-  if (is.null(getOption("repos")) || getOption("repos")["CRAN"] == "@CRAN@") {
-    options(repos = c(CRAN = "https://cloud.r-project.org"))
-  }
-}
-
-# Comprehensive master package list across all scripts
-required_pkgs <- c(
-  "boot", "broom", "broom.mixed", "cowplot", "data.table", "datawizard", 
-  "dendextend", "emmeans", "future", "GGally", "ggeffects", "ggh4x", 
-  "ggnewscale", "ggplot2", "ggpubr", "ggrepel", "ggridges", "ggstats", 
-  "grid", "gridExtra", "gtable", "here", "htmltools", "insight", 
-  "janitor", "kableExtra", "knitr", "lme4", "lmerTest", "logr", "magick", 
-  "MASS", "openxlsx", "patchwork", "plotly", "ragg", "RColorBrewer", 
-  "readxl", "reshape2", "rmarkdown", "scales", "segmented", "tidyverse", 
-  "writexl", "yaml"
-)
-
-# Identify uninstalled packages
-missing_pkgs <- required_pkgs[!(required_pkgs %in% installed.packages()[, "Package"])]
-
-if (length(missing_pkgs) > 0) {
-  # Dynamically check for any version of Rtools environment setups
-  has_rtools <- any(grepl("RTOOLS", names(Sys.getenv()))) || nzchar(Sys.which("make"))
-  
-  if (has_rtools) {
-    message("Rtools detected. Installing missing analysis packages...")
-    install.packages(missing_pkgs)
-  } else {
-    message("Rtools NOT found. Installing pre-compiled binaries...")
-    install.packages(missing_pkgs, type = getOption("pkgType")) 
-  }
-} else {
-  message("✅ All required pipelines and dependencies are successfully installed.")
-}
-
-# Load packages cleanly into memory
-invisible(lapply(required_pkgs, library, character.only = TRUE))
-
-# Clean up token from active session memory for cleanliness
-Sys.unsetenv("GITHUB_PAT")
 
 # ==============================================================================
 # STEP 5: SETUP AUTO-LAUNCH & OPEN NEW PROJECT INSTANCE
@@ -242,7 +233,7 @@ if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable())
 }
 
 # 4. Cleanly halt automated setup execution in the original window
-stop(
+message(
   paste0(
     "\n=====================================================================\n",
     "SETUP COMPLETE & HALTED\n",

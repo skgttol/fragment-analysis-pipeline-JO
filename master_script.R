@@ -18,8 +18,6 @@ FORCE_UPDATE_SCRIPTS <- TRUE
 # Replace 'YOUR_USERNAME' and 'YOUR_REPO' with your actual GitHub details.
 # Ensure the branch name ('main' or 'master') is correct.
 github_base_url <- "https://raw.githubusercontent.com/skgttol/fragment-analysis-pipeline-JO/main/"
-github_token <- "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"
-auth_header <- c(Authorization = paste("Token", github_token))
 
 # Master list of all required scripts
 pipeline_scripts <- c(
@@ -55,7 +53,7 @@ if (missing_locally || FORCE_UPDATE_SCRIPTS) {
     message(sprintf("Downloading %s...", script))
     
     dl_status <- try(download.file(url, destfile = dest, mode = "wb", # Changed to 'wb' to prevent Windows line break bugs
-                                   headers = auth_header, quiet = TRUE), silent = TRUE)
+                                   quiet = TRUE), silent = TRUE)
     
     if (inherits(dl_status, "try-error") || dl_status != 0) {
       stop(sprintf("\n❌ ERROR: Failed to download '%s'.\nCheck your internet, URL, or ensure your token hasn't expired.", script))
