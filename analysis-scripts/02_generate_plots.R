@@ -87,6 +87,7 @@ load(rdata_path)
 print(paste("Data loaded successfully from:", rdata_path))
 
 config <- yaml::read_yaml(here::here("config.yml")) # reload config file in case of updates
+output_dir <- latest_analysis_dir
 
 # 2. NOW, (re)open the log file.
 try(logr::log_close(), silent = TRUE)
