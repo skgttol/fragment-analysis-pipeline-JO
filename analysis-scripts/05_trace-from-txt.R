@@ -54,7 +54,8 @@ logr::log_print(paste("Successfully identified latest analysis directory:", base
 load(file.path(latest_analysis_dir, "processing_complete.RData"))
 latest_analysis_dir <- real_latest_analysis_dir
 
-config <- yaml::read_yaml(here::here("config.yml"))
+config <- yaml::read_yaml(here::here("config.yml")) # reload config file in case of updates
+output_dir <- latest_analysis_dir
 
 trace_output_dir <- file.path(latest_analysis_dir, "05_trace_plots")
 dir.create(trace_output_dir, showWarnings = FALSE)
