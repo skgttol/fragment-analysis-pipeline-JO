@@ -526,7 +526,7 @@ for (resp_var in response_vars) {
       )
     ) +
       { if (grepl("change|_change", resp_var, ignore.case = TRUE)) geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50", linewidth = 0.5) } +
-      geom_line(alpha = 0.7, linewidth = 0.7) +
+      geom_line(alpha = 0.7, linewidth = 0.7, stat = "summary", fun = "mean") +
       geom_point(
         mapping = create_plot_aes(aes(color = if(has_pseudo_clones) clone_rank else !!sym(color_var)), re_cross),
         alpha = 0.85, size = 2
@@ -614,11 +614,11 @@ for (resp_var in response_vars) {
     dplyr::mutate(facet_id = factor(facet_id, levels = unique(facet_id)))
   
   # 4. Loop over the Primary Group (Genotype/Treatment) and generate ONE FILE PER GROUP
-  unique_groups <- unique(plot_data_pcr[[label_exp]])
+  unique_groups <- unique(plot_data_pcr[[primary_var]])
   
   for (grp in unique_groups) {
     # Subset data for this specific Genotype/Primary Group
-    sub_data <- plot_data_pcr %>% dplyr::filter(!!sym(label_exp) == grp)
+    sub_data <- plot_data_pcr %>% dplyr::filter(!!sym(primary_var) == grp)
     
     # Safety check: skip if no data exists
     if (nrow(sub_data) == 0) next
@@ -661,7 +661,7 @@ for (resp_var in response_vars) {
     # Safe filename formatting (converts weird characters to underscores)
     safe_grp <- stringr::str_replace_all(as.character(grp), "[^A-Za-z0-9_\\-]", "_")
     safe_grp <- stringr::str_replace_all(safe_grp, "_+", "_")
-    file_name <- paste0("02_detail_pcr_", safe_grp, "_", short_resp_var, ".tiff")
+    file_name <- paste0("pcr_reps_", safe_grp, "_", short_resp_var, ".tiff")
     
     # Print to Viewer & Save to the NEW Nested Folder
     base::print(p_detail_rep)
@@ -2952,10 +2952,24 @@ for (current_resp_var in response_vars) {
     }
     baseline_string <- paste0("Baseline: ", paste(baseline_info, collapse = " | "))
     
+    # Grab the dynamic variables for clean replacement
+    time_v <- config$key_variables$time_variable
+    prim_v <- config$key_variables$primary_group_var
+    
     mc <- mc %>%
       dplyr::filter(!is.na(Estimate)) %>%
+      # 1. Rename Intercept
       dplyr::mutate(Parameter = ifelse(Parameter == "(Intercept)", baseline_string, Parameter)) %>%
+      # 2. Swap colon for multiplier symbol
       dplyr::mutate(Parameter = stringr::str_replace_all(Parameter, ":", " × ")) %>%
+      # 3. Humanize the Time variable (e.g., "weeks" -> "Baseline Expansion Speed")
+      dplyr::mutate(Parameter = stringr::str_replace_all(Parameter, paste0("^", time_v, "$"), "Baseline Expansion Speed (Reference Group)")) %>%
+      # 4. Humanize the Interaction terms (e.g., "weeks x" -> "Speed Diff: ")
+      dplyr::mutate(Parameter = stringr::str_replace_all(Parameter, paste0(time_v, " × "), "Speed Diff: ")) %>%
+      # 5. Clean up the mashed Genotype variable (e.g., "genotypeFAN1 KO" -> "Start Diff: FAN1 KO")
+      dplyr::mutate(Parameter = stringr::str_replace_all(Parameter, paste0("^", prim_v), "Start Diff: ")) %>%
+      # 6. Clean up residual mashed variables in interaction terms
+      dplyr::mutate(Parameter = stringr::str_replace_all(Parameter, prim_v, "")) %>%
       # FIX: Crash-proof p-value formatting
       dplyr::mutate(dplyr::across(dplyr::any_of(c(pval_cols, pval_adj_cols)), ~ format_p_val(as.numeric(.))))
     

@@ -56,19 +56,19 @@ latest_analysis_dir <- real_latest_analysis_dir
 
 config <- yaml::read_yaml(here::here("config.yml"))
 
-trace_output_dir <- file.path(latest_analysis_dir, "trace_plots")
+trace_output_dir <- file.path(latest_analysis_dir, "05_trace_plots")
 dir.create(trace_output_dir, showWarnings = FALSE)
 
 # --- Organized Sub-folders ---
-pdf_base_dir   <- file.path(trace_output_dir, "pdf_reports") 
-tiff_dir       <- file.path(trace_output_dir, "publication_figures") 
+pdf_base_dir   <- file.path(trace_output_dir, "traces") 
+tiff_dir       <- file.path(trace_output_dir, "overlay_figures") 
 excel_dir      <- file.path(trace_output_dir, "data_tables") # New folder for Excel
 
 # Specific PDF Folders
-pdf_dir_exp    <- file.path(pdf_base_dir, "03_Expanded")
+pdf_dir_exp    <- file.path(pdf_base_dir, "03_expanded")
 pdf_dir_wt     <- file.path(pdf_base_dir, "01_WT")
-pdf_dir_target <- file.path(pdf_base_dir, "02_Target")
-pdf_dir_smooth <- file.path(pdf_base_dir, "04_Smoothed")
+pdf_dir_target <- file.path(pdf_base_dir, "02_target")
+pdf_dir_smooth <- file.path(pdf_base_dir, "04_smoothed")
 
 # Create all directories recursively
 dir.create(tiff_dir, showWarnings = FALSE, recursive = TRUE)
@@ -344,7 +344,7 @@ for (geno in unique_genos) {
                             pdf_base_dir)
     
     safe_geno <- gsub("[^A-Za-z0-9_]", "_", geno)
-    fname <- file.path(curr_save_dir, paste0("TraceReport_", mode_name, "_", safe_geno, ".pdf"))
+    fname <- file.path(curr_save_dir, paste0(mode_name, "_", safe_geno, ".pdf"))
     
     # OPEN PDF ONCE PER FILE
     pdf(file = fname, width = 8.5, height = 11)
@@ -818,186 +818,337 @@ clone_var <- config$key_variables$secondary_group_var
 primary_var <- config$key_variables$primary_group_var
 time_var <- config$key_variables$time_variable
 
-# Base shared theme for all overview plots
+# Base shared themes for clean facet strips
 common_theme <- theme_cowplot() +
   theme(
     strip.text.y.left = element_text(angle = 0, face = "bold", hjust = 1, size = 10),
     strip.text.x = element_text(face = "bold", size = 11),
     strip.background = element_blank(),
-    axis.text.y = element_blank(), 
-    axis.ticks.y = element_blank(), 
-    axis.line.y = element_blank()
+    axis.text.y = element_blank(), axis.ticks.y = element_blank(), axis.line.y = element_blank()
   )
+
+overlay_theme <- theme_cowplot() +
+  theme(
+    strip.background = element_blank(),
+    strip.text.y = element_text(angle = 0, face = "bold", size = 11),
+    axis.text.y = element_blank(), 
+    axis.ticks.y = element_blank(),
+    axis.line.y = element_line(color = "black", linewidth = 0.5), # Continuous Y-axis
+    panel.grid.major.x = element_line(color = "grey95")
+  )
+
+# =========================================================================== #
+# PHASE 0A: GROUP AVERAGE PLOT (Mean Trace per Genotype)
+# =========================================================================== #
+baseline_full_data <- plot_data_full %>%
+  dplyr::filter(!!sym(time_var) == min(!!sym(time_var), na.rm = TRUE))
+
+if(nrow(baseline_full_data) > 0) {
+  avg_trace_data <- baseline_full_data %>%
+    mutate(CAG_Bin = round(CAG, 1)) %>%
+    group_by(!!sym(plot_label_col), CAG_Bin) %>%
+    summarise(Height = mean(Height, na.rm=TRUE), .groups="drop") %>%
+    rename(CAG = CAG_Bin)
+  
+  p_avg_overview <- ggplot(avg_trace_data, aes(x = CAG, y = Height)) +
+    geom_area(fill = "black", alpha = 0.8) + 
+    geom_line(color = "black", linewidth = 0.3) +
+    facet_grid(rows = vars(!!sym(plot_label_col)), scales = "free_y", switch = "y") +
+    scale_x_continuous(limits = c(x_min_ov, x_max_ov)) +
+    labs(title = "Genotype Baseline Overview: Group Average", subtitle = "Composite average of all biological replicates at baseline timepoint.", x = "CAG Repeat Length", y = "Intensity (RFU)") +
+    theme_cowplot() + theme(strip.text.y.left = element_text(angle = 0, face = "bold", hjust = 1, size = 10), axis.text.y = element_blank(), axis.ticks.y = element_blank(), axis.line.y = element_blank(), panel.spacing = unit(0.2, "lines"), strip.background = element_blank())
+  
+  ggsave(file.path(overview_dir, "Genotype_Overview_Average.tiff"), p_avg_overview, width = 8, height = 10, compression = "lzw")
+}
+
+# =========================================================================== #
+# PHASE 0B: SINGLE REPLICATE SELECTION LOGIC
+# =========================================================================== #
+target_rep_id <- "1" 
+files_with_trace_data <- unique(optimized_data$fsa_filename)
+override_file_path <- file.path(analysis_base_dir, "representative_traces.csv")
+
+if (file.exists(override_file_path)) {
+  logr::log_print("Using external 'representative_traces.csv' for plot selection...", console=TRUE)
+  manual_selection <- read.csv(override_file_path, stringsAsFactors = FALSE)
+  selected_meta <- peaks_annotated %>%
+    dplyr::filter(!is_excluded, fsa_filename %in% files_with_trace_data) %>%
+    semi_join(manual_selection, by = intersect(colnames(manual_selection), colnames(peaks_annotated)))
+} else {
+  logr::log_print("Auto-selecting 1st clone and target replicate for overview plots...", console=TRUE)
+  valid_meta <- peaks_annotated %>%
+    dplyr::filter(!is_excluded, fsa_filename %in% files_with_trace_data, !is.na(!!sym(primary_var)), !is.na(!!sym(clone_var)), !is.na(mode), !is.na(instability_index)) %>%
+    dplyr::mutate(!!sym(time_var) := as.numeric(as.character(!!sym(time_var))))
+  
+  complete_bioreps <- valid_meta %>%
+    group_by(bio_id) %>%
+    dplyr::mutate(geno_min_time = min(!!sym(time_var), na.rm = TRUE), geno_max_time = max(!!sym(time_var), na.rm = TRUE)) %>%
+    dplyr::filter(any(!!sym(time_var) == geno_min_time) & any(!!sym(time_var) == geno_max_time)) %>%
+    pull(bio_rep_id) %>% unique()
+  
+  selected_meta <- valid_meta %>%
+    dplyr::filter(bio_rep_id %in% complete_bioreps) %>%
+    group_by(!!sym(primary_var), !!sym(clone_var)) %>% 
+    mutate(max_time_for_this_clone = max(!!sym(time_var), na.rm = TRUE)) %>%
+    group_by(!!sym(primary_var)) %>% 
+    arrange(desc(max_time_for_this_clone), !!sym(clone_var), as.numeric(as.character(!!sym(rep_var)))) %>%
+    dplyr::filter(!!sym(clone_var) == first(!!sym(clone_var))) %>%
+    dplyr::filter(if(any(!!sym(rep_var) == target_rep_id)) !!sym(rep_var) == target_rep_id else !!sym(rep_var) == first(!!sym(rep_var))) %>%
+    slice(1) %>% ungroup()
+}
+
+target_bioreps <- unique(selected_meta$bio_rep_id)
+
+plot_data_reps <- optimized_data %>%
+  left_join(peaks_annotated, by = "fsa_filename") %>%
+  dplyr::filter(bio_rep_id %in% target_bioreps & !is_excluded) %>%
+  dplyr::group_by(bio_rep_id) %>%
+  dplyr::filter(pcr == min(pcr, na.rm = TRUE)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(Display_Label = paste(!!sym(pub_label_col), "|", !!sym(clone_var)))
 
 # =========================================================================== #
 # PHASE 1: DATA PREP - BASELINE SPLIT (WT vs Expanded)
 # =========================================================================== #
-baseline_rep_data <- plot_data_reps %>% 
-  dplyr::filter(!!sym(time_var) == min(!!sym(time_var), na.rm=TRUE))
-
-single_rep_split_raw <- bind_rows(
-  baseline_rep_data %>% dplyr::filter(CAG >= wt_lims[1] & CAG <= wt_lims[2]) %>% mutate(Panel_Region = "WT Allele"),
-  baseline_rep_data %>% dplyr::filter(CAG >= exp_lims[1] & CAG <= exp_lims[2]) %>% mutate(Panel_Region = "Expanded Allele")
-) %>% 
-  mutate(Panel_Region = factor(Panel_Region, levels = c("WT Allele", "Expanded Allele")))
-
-# A. Smooth Data 
-baseline_split_smooth <- single_rep_split_raw %>%
-  group_by(Display_Label, Panel_Region, !!sym(pub_label_col), fsa_filename) %>%
-  do({
-    if(nrow(.) > 10) {
-      fit <- smooth.spline(x = .$CAG, y = .$Height, spar = 0.3)
-      grid_x <- seq(min(.$CAG), max(.$CAG), length.out = 500)
-      pred_y <- predict(fit, grid_x)$y
-      pred_y[pred_y < 0] <- 0
-      data.frame(CAG = grid_x, Height = pred_y)
-    } else {
-      data.frame(CAG = .$CAG, Height = .$Height)
-    }
-  }) %>% ungroup() %>%
-  group_by(fsa_filename, Panel_Region) %>%
-  mutate(Norm_Height = Height / max(Height, na.rm = TRUE)) %>% ungroup()
-
-# B. Jagged/Rounded Data
-baseline_split_jagged <- single_rep_split_raw %>%
-  group_by(Display_Label, Panel_Region, !!sym(pub_label_col), fsa_filename) %>%
-  do(generate_rounded_peaks(., width_cag = 0.35, resolution = 51)) %>% ungroup() %>%
-  group_by(fsa_filename, Panel_Region) %>%
-  mutate(Norm_Height = Height / max(Height, na.rm = TRUE)) %>% ungroup()
-
-# =========================================================================== #
-# PHASE 2: PLOTTING - BASELINE SPLIT
-# =========================================================================== #
-if(nrow(baseline_split_smooth) > 0) {
+if(nrow(plot_data_reps) > 0) {
+  baseline_rep_data <- plot_data_reps %>% 
+    dplyr::filter(!!sym(time_var) == min(!!sym(time_var), na.rm=TRUE))
   
-  # --- 2A: Generate Smoothed Baseline Grid ---
-  p_wt_sm <- ggplot(baseline_split_smooth %>% filter(Panel_Region == "WT Allele"), aes(x = CAG, y = Norm_Height)) +
-    geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
-    facet_grid(rows = vars(Display_Label), switch = "y") +
-    scale_x_continuous(limits = wt_lims, breaks = seq(0, 100, by = 5)) +
-    scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05))) +
-    scale_fill_manual(values = unname(create_custom_palette(baseline_split_smooth, config, pub_label_col))) +
-    labs(title = NULL, x = NULL, y = "Normalized Intensity") + common_theme + guides(fill = "none") + theme(plot.margin = margin(r = 5))
+  single_rep_split_raw <- bind_rows(
+    baseline_rep_data %>% dplyr::filter(CAG >= wt_lims[1] & CAG <= wt_lims[2]) %>% mutate(Panel_Region = "WT Allele"),
+    baseline_rep_data %>% dplyr::filter(CAG >= exp_lims[1] & CAG <= exp_lims[2]) %>% mutate(Panel_Region = "Expanded Allele")
+  ) %>% 
+    mutate(Panel_Region = factor(Panel_Region, levels = c("WT Allele", "Expanded Allele")))
   
-  p_exp_sm <- ggplot(baseline_split_smooth %>% filter(Panel_Region == "Expanded Allele"), aes(x = CAG, y = Norm_Height)) +
-    geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
-    facet_grid(rows = vars(Display_Label)) + 
-    scale_x_continuous(limits = exp_lims, breaks = seq(0, 1000, by = 20)) +
-    scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05))) +
-    scale_fill_manual(values = unname(create_custom_palette(baseline_split_smooth, config, pub_label_col))) +
-    labs(title = NULL, x = NULL, y = NULL) + common_theme + guides(fill = "none") + theme(strip.text.y = element_blank(), plot.margin = margin(l = 5))  
+  # A. Smooth Data 
+  baseline_split_smooth <- single_rep_split_raw %>%
+    group_by(Display_Label, Panel_Region, !!sym(pub_label_col), !!sym(clone_var), fsa_filename) %>%
+    do({
+      if(nrow(.) > 10) {
+        fit <- smooth.spline(x = .$CAG, y = .$Height, spar = 0.3)
+        grid_x <- seq(min(.$CAG), max(.$CAG), length.out = 500)
+        pred_y <- predict(fit, grid_x)$y
+        pred_y[pred_y < 0] <- 0
+        data.frame(CAG = grid_x, Height = pred_y)
+      } else {
+        data.frame(CAG = .$CAG, Height = .$Height)
+      }
+    }) %>% ungroup() %>%
+    group_by(fsa_filename, Panel_Region) %>%
+    mutate(Norm_Height = Height / max(Height, na.rm = TRUE)) %>% ungroup() %>%
+    # --- FACTOR LOCK ---
+    arrange(!!sym(pub_label_col), !!sym(clone_var)) %>%
+    mutate(Display_Label = factor(Display_Label, levels = unique(as.character(Display_Label))))
   
-  grid_sm <- plot_grid(p_wt_sm, p_exp_sm, align = "h", axis = "bt", nrow = 1, rel_widths = c(1, 2.5))
-  final_sm <- ggdraw() + draw_plot(grid_sm, x = 0, y = 0.05, width = 1, height = 0.9) +
-    draw_label("Genotype Baseline Overview (Smoothed)", x = 0.5, y = 0.97, fontface = "bold", size = 14) +
-    draw_label("CAG Repeat Length", x = 0.5, y = 0.02, fontface = "bold")
-  ggsave(file.path(overview_dir, "Genotype_SingleRep_Smoothed.tiff"), final_sm, width = 8, height = 10, compression = "lzw")
+  # B. Jagged/Rounded Data
+  baseline_split_jagged <- single_rep_split_raw %>%
+    group_by(Display_Label, Panel_Region, !!sym(pub_label_col), !!sym(clone_var), fsa_filename) %>%
+    do(generate_rounded_peaks(., width_cag = 0.35, resolution = 51)) %>% ungroup() %>%
+    group_by(fsa_filename, Panel_Region) %>%
+    mutate(Norm_Height = Height / max(Height, na.rm = TRUE)) %>% ungroup() %>%
+    # --- FACTOR LOCK ---
+    arrange(!!sym(pub_label_col), !!sym(clone_var)) %>%
+    mutate(Display_Label = factor(Display_Label, levels = unique(as.character(Display_Label))))
   
-  # --- 2B: Generate Jagged Baseline Grid ---
-  p_wt_jg <- ggplot(baseline_split_jagged %>% filter(Panel_Region == "WT Allele"), aes(x = CAG, y = Norm_Height)) +
-    geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
-    facet_grid(rows = vars(Display_Label), switch = "y") +
-    scale_x_continuous(limits = wt_lims, breaks = seq(0, 100, by = 5)) +
-    scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05))) +
-    scale_fill_manual(values = unname(create_custom_palette(baseline_split_jagged, config, pub_label_col))) +
-    labs(title = NULL, x = NULL, y = "Normalized Intensity") + common_theme + guides(fill = "none") + theme(plot.margin = margin(r = 5))
+  # =========================================================================== #
+  # PHASE 2: PLOTTING - BASELINE SPLIT
+  # =========================================================================== #
+  if(nrow(baseline_split_smooth) > 0) {
+    # --- 2A: Generate Smoothed Baseline Grid ---
+    p_wt_sm <- ggplot(baseline_split_smooth %>% filter(Panel_Region == "WT Allele"), aes(x = CAG, y = Norm_Height)) +
+      geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
+      facet_grid(rows = vars(Display_Label), switch = "y") +
+      scale_x_continuous(limits = wt_lims, breaks = seq(0, 100, by = 5)) +
+      scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05))) +
+      scale_fill_manual(values = unname(create_custom_palette(baseline_split_smooth, config, pub_label_col))) +
+      labs(title = NULL, x = NULL, y = "Normalized Intensity") + common_theme + guides(fill = "none") + theme(plot.margin = margin(r = 5))
+    
+    p_exp_sm <- ggplot(baseline_split_smooth %>% filter(Panel_Region == "Expanded Allele"), aes(x = CAG, y = Norm_Height)) +
+      geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
+      facet_grid(rows = vars(Display_Label)) + 
+      scale_x_continuous(limits = exp_lims, breaks = seq(0, 1000, by = 20)) +
+      scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05))) +
+      scale_fill_manual(values = unname(create_custom_palette(baseline_split_smooth, config, pub_label_col))) +
+      labs(title = NULL, x = NULL, y = NULL) + common_theme + guides(fill = "none") + theme(strip.text.y = element_blank(), plot.margin = margin(l = 5))  
+    
+    grid_sm <- plot_grid(p_wt_sm, p_exp_sm, align = "h", axis = "bt", nrow = 1, rel_widths = c(1, 2.5))
+    final_sm <- ggdraw() + draw_plot(grid_sm, x = 0, y = 0.05, width = 1, height = 0.9) +
+      draw_label("Genotype Baseline Overview (Smoothed)", x = 0.5, y = 0.97, fontface = "bold", size = 14) +
+      draw_label("CAG Repeat Length", x = 0.5, y = 0.02, fontface = "bold")
+    ggsave(file.path(overview_dir, "Genotype_SingleRep_Smoothed.tiff"), final_sm, width = 8, height = 10, compression = "lzw")
+    
+    # --- 2B: Generate Jagged Baseline Grid ---
+    p_wt_jg <- ggplot(baseline_split_jagged %>% filter(Panel_Region == "WT Allele"), aes(x = CAG, y = Norm_Height)) +
+      geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
+      facet_grid(rows = vars(Display_Label), switch = "y") +
+      scale_x_continuous(limits = wt_lims, breaks = seq(0, 100, by = 5)) +
+      scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05))) +
+      scale_fill_manual(values = unname(create_custom_palette(baseline_split_jagged, config, pub_label_col))) +
+      labs(title = NULL, x = NULL, y = "Normalized Intensity") + common_theme + guides(fill = "none") + theme(plot.margin = margin(r = 5))
+    
+    p_exp_jg <- ggplot(baseline_split_jagged %>% filter(Panel_Region == "Expanded Allele"), aes(x = CAG, y = Norm_Height)) +
+      geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
+      facet_grid(rows = vars(Display_Label)) + 
+      scale_x_continuous(limits = exp_lims, breaks = seq(0, 1000, by = 20)) +
+      scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05))) +
+      scale_fill_manual(values = unname(create_custom_palette(baseline_split_jagged, config, pub_label_col))) +
+      labs(title = NULL, x = NULL, y = NULL) + common_theme + guides(fill = "none") + theme(strip.text.y = element_blank(), plot.margin = margin(l = 5))  
+    
+    grid_jg <- plot_grid(p_wt_jg, p_exp_jg, align = "h", axis = "bt", nrow = 1, rel_widths = c(1, 2.5))
+    final_jg <- ggdraw() + draw_plot(grid_jg, x = 0, y = 0.05, width = 1, height = 0.9) +
+      draw_label("Genotype Baseline Overview (Jagged Peaks)", x = 0.5, y = 0.97, fontface = "bold", size = 14) +
+      draw_label("CAG Repeat Length", x = 0.5, y = 0.02, fontface = "bold")
+    ggsave(file.path(overview_dir, "Genotype_SingleRep_Jagged.tiff"), final_jg, width = 8, height = 10, compression = "lzw")
+  }
   
-  p_exp_jg <- ggplot(baseline_split_jagged %>% filter(Panel_Region == "Expanded Allele"), aes(x = CAG, y = Norm_Height)) +
-    geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
-    facet_grid(rows = vars(Display_Label)) + 
-    scale_x_continuous(limits = exp_lims, breaks = seq(0, 1000, by = 20)) +
-    scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05))) +
-    scale_fill_manual(values = unname(create_custom_palette(baseline_split_jagged, config, pub_label_col))) +
-    labs(title = NULL, x = NULL, y = NULL) + common_theme + guides(fill = "none") + theme(strip.text.y = element_blank(), plot.margin = margin(l = 5))  
+  # =========================================================================== #
+  # PHASE 3: DATA PREP - START VS END OVERLAY
+  # =========================================================================== #
+  logr::log_print("  -> Generating Start vs End Representative Overlay...", console=TRUE)
   
-  grid_jg <- plot_grid(p_wt_jg, p_exp_jg, align = "h", axis = "bt", nrow = 1, rel_widths = c(1, 2.5))
-  final_jg <- ggdraw() + draw_plot(grid_jg, x = 0, y = 0.05, width = 1, height = 0.9) +
-    draw_label("Genotype Baseline Overview (Jagged Peaks)", x = 0.5, y = 0.97, fontface = "bold", size = 14) +
-    draw_label("CAG Repeat Length", x = 0.5, y = 0.02, fontface = "bold")
-  ggsave(file.path(overview_dir, "Genotype_SingleRep_Jagged.tiff"), final_jg, width = 8, height = 10, compression = "lzw")
-}
-
-# =========================================================================== #
-# PHASE 3: DATA PREP - START VS END OVERLAY
-# =========================================================================== #
-logr::log_print("  -> Generating Start vs End Representative Overlay...", console=TRUE)
-
-raw_overlay_data <- plot_data_reps %>%
-  dplyr::filter(CAG >= exp_lims[1] & CAG <= exp_lims[2]) %>%
-  group_by(!!sym(primary_var),!!sym(secondary_var)) %>%
-  dplyr::filter(!!sym(time_var) == min(!!sym(time_var), na.rm=TRUE) | 
-                  !!sym(time_var) == max(!!sym(time_var), na.rm=TRUE)) %>%
-  mutate(Timepoint_Label = ifelse(
-    !!sym(time_var) == min(!!sym(time_var), na.rm=TRUE), "Start", "End"
-  )) %>%
-  mutate(Timepoint_Label = factor(Timepoint_Label, levels = c("Start", "End"))) %>%
-  group_by(bio_rep_id, Timepoint_Label) %>%
-  dplyr::filter(pcr == min(as.numeric(as.character(pcr)), na.rm = TRUE)) %>% ungroup() 
-
-# A. Smooth Data
-smooth_overlay_data <- raw_overlay_data %>%
-  group_by(Display_Label, Timepoint_Label, fsa_filename) %>%
-  do({
-    if(nrow(.) > 10) {
-      fit <- smooth.spline(x = .$CAG, y = .$Height, spar = 0.3)
-      grid_x <- seq(min(.$CAG), max(.$CAG), length.out = 500)
-      pred_y <- predict(fit, grid_x)$y
-      pred_y[pred_y < 0] <- 0
-      data.frame(CAG = grid_x, Height = pred_y)
-    } else {
-      data.frame(CAG = .$CAG, Height = .$Height)
-    }
-  }) %>% ungroup() %>%
-  group_by(fsa_filename) %>%
-  mutate(Norm_Height = Height / max(Height, na.rm = TRUE)) %>% ungroup()
-
-# B. Jagged/Rounded Data
-jagged_overlay_data <- raw_overlay_data %>%
-  group_by(Display_Label, Timepoint_Label, fsa_filename) %>%
-  do(generate_rounded_peaks(., width_cag = 0.35, resolution = 51)) %>% ungroup() %>%
-  group_by(fsa_filename) %>%
-  mutate(Norm_Height = Height / max(Height, na.rm = TRUE)) %>% ungroup()
-
-# =========================================================================== #
-# PHASE 4: PLOTTING - START VS END OVERLAY
-# =========================================================================== #
-overlay_theme <- theme_cowplot() +
-  theme(
-    strip.text.y = element_text(angle = 0, face = "bold"),
-    axis.text.y = element_blank(), 
-    axis.ticks.y = element_blank(),
-    panel.grid.major.x = element_line(color = "grey95")
-  )
-
-if(nrow(smooth_overlay_data) > 0) {
+  raw_overlay_data <- plot_data_reps %>%
+    dplyr::filter(CAG >= exp_lims[1] & CAG <= exp_lims[2]) %>%
+    group_by(!!sym(primary_var),!!sym(secondary_var)) %>%
+    dplyr::filter(!!sym(time_var) == min(!!sym(time_var), na.rm=TRUE) | 
+                    !!sym(time_var) == max(!!sym(time_var), na.rm=TRUE)) %>%
+    mutate(Timepoint_Label = ifelse(
+      !!sym(time_var) == min(!!sym(time_var), na.rm=TRUE), "Start", "End"
+    )) %>%
+    mutate(Timepoint_Label = factor(Timepoint_Label, levels = c("Start", "End"))) %>%
+    group_by(bio_rep_id, Timepoint_Label) %>%
+    dplyr::filter(pcr == min(as.numeric(as.character(pcr)), na.rm = TRUE)) %>% ungroup() 
   
-  # --- 4A: Plot Smoothed Overlay ---
-  p_sm_overlay <- ggplot(smooth_overlay_data, aes(x = CAG, y = Norm_Height)) +
-    geom_area(aes(fill = Timepoint_Label), alpha = 0.4, position = "identity") +
-    geom_line(aes(color = Timepoint_Label), linewidth = 0.5) +
-    facet_wrap(vars(Display_Label), ncol = 1, strip.position = "right", axes = "all") +
-    scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05)), breaks = NULL, name = "Normalized Intensity") +
-    scale_fill_manual(values = c("Start" = "grey60", "End" = "red")) +
-    scale_color_manual(values = c("Start" = "black", "End" = "darkred")) +
-    labs(title = "Representative Single Trace: Start vs End Expansion (Smoothed)", subtitle = "Expanded Allele Region", x = "CAG Length", fill = "Timepoint", color = "Timepoint") +
-    overlay_theme
+  # A. Smooth Data
+  smooth_overlay_data <- raw_overlay_data %>%
+    group_by(Display_Label, Timepoint_Label, !!sym(pub_label_col), !!sym(clone_var), fsa_filename) %>%
+    do({
+      if(nrow(.) > 10) {
+        fit <- smooth.spline(x = .$CAG, y = .$Height, spar = 0.3)
+        grid_x <- seq(min(.$CAG), max(.$CAG), length.out = 500)
+        pred_y <- predict(fit, grid_x)$y
+        pred_y[pred_y < 0] <- 0
+        data.frame(CAG = grid_x, Height = pred_y)
+      } else {
+        data.frame(CAG = .$CAG, Height = .$Height)
+      }
+    }) %>% ungroup() %>%
+    group_by(fsa_filename) %>%
+    mutate(Norm_Height = Height / max(Height, na.rm = TRUE)) %>% ungroup() %>%
+    # --- FACTOR LOCK ---
+    arrange(!!sym(pub_label_col), !!sym(clone_var)) %>%
+    mutate(Display_Label = factor(Display_Label, levels = unique(as.character(Display_Label))))
   
-  print(p_sm_overlay)
-  ggsave(file.path(overview_dir, "Representative_Start_vs_End_Overlay_Smoothed.tiff"), p_sm_overlay, width = 12, height = 8, compression = "lzw")
+  # B. Jagged/Rounded Data
+  jagged_overlay_data <- raw_overlay_data %>%
+    group_by(Display_Label, Timepoint_Label, !!sym(pub_label_col), !!sym(clone_var), fsa_filename) %>%
+    do(generate_rounded_peaks(., width_cag = 0.35, resolution = 51)) %>% ungroup() %>%
+    group_by(fsa_filename) %>%
+    mutate(Norm_Height = Height / max(Height, na.rm = TRUE)) %>% ungroup() %>%
+    # --- FACTOR LOCK ---
+    arrange(!!sym(pub_label_col), !!sym(clone_var)) %>%
+    mutate(Display_Label = factor(Display_Label, levels = unique(as.character(Display_Label))))
   
-  # --- 4B: Plot Jagged/Rounded Overlay ---
-  p_jg_overlay <- ggplot(jagged_overlay_data, aes(x = CAG, y = Norm_Height)) +
-    geom_area(aes(fill = Timepoint_Label), alpha = 0.2, position = "identity") +
-    geom_line(aes(color = Timepoint_Label), linewidth = 0.4, alpha = 0.7, position = "identity") +
-    facet_wrap(vars(Display_Label), ncol = 1, strip.position = "right") +
-    scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05)), breaks = NULL, name = "Normalized Intensity") +
-    scale_fill_manual(values = c("Start" = "grey60", "End" = "red")) +
-    scale_color_manual(values = c("Start" = "black", "End" = "darkred")) +
-    labs(title = "Representative Single Trace: Start vs End Expansion (Jagged)", subtitle = "Expanded Allele Region (Rounded Spikes)", x = "CAG Length", fill = "Timepoint", color = "Timepoint") +
-    overlay_theme
-  
-  print(p_jg_overlay)
-  ggsave(file.path(overview_dir, "Representative_Start_vs_End_Overlay_Jagged.tiff"), p_jg_overlay, width = 12, height = 8, compression = "lzw")
+  # =========================================================================== #
+  # PHASE 4: PLOTTING - START VS END OVERLAY (Absolute & Aligned)
+  # =========================================================================== #
+  if(nrow(smooth_overlay_data) > 0) {
+    
+    # --- PRE-CALCULATE APEX COORDINATES FOR V-LINES ---
+    # This prevents ggplot from having to calculate max values on the fly
+    apex_sm <- smooth_overlay_data %>%
+      dplyr::group_by(Display_Label) %>%
+      dplyr::summarise(
+        Start_Apex = CAG[Timepoint_Label == "Start"][which.max(Norm_Height[Timepoint_Label == "Start"])],
+        End_Apex   = CAG[Timepoint_Label == "End"][which.max(Norm_Height[Timepoint_Label == "End"])],
+        End_Shift  = End_Apex - Start_Apex, # The relative position for the anchored plot
+        .groups = "drop"
+      )
+    
+    apex_jg <- jagged_overlay_data %>%
+      dplyr::group_by(Display_Label) %>%
+      dplyr::summarise(
+        Start_Apex = CAG[Timepoint_Label == "Start"][which.max(Norm_Height[Timepoint_Label == "Start"])],
+        End_Apex   = CAG[Timepoint_Label == "End"][which.max(Norm_Height[Timepoint_Label == "End"])],
+        End_Shift  = End_Apex - Start_Apex,
+        .groups = "drop"
+      )
+    
+    # --- 4A: Plot Absolute Overlay (Smoothed) ---
+    p_sm_overlay <- ggplot(smooth_overlay_data, aes(x = CAG, y = Norm_Height)) +
+      geom_area(aes(fill = Timepoint_Label), alpha = 0.4, position = "identity") +
+      geom_line(aes(color = Timepoint_Label), linewidth = 0.5) +
+      # Add the End Apex dotted line
+      geom_vline(data = apex_sm, aes(xintercept = End_Apex), linetype = "dotted", color = "darkred", linewidth = 0.6) +
+      facet_wrap(vars(Display_Label), ncol = 1, strip.position = "right", axes = "all") +
+      scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05)), breaks = NULL, name = "Normalized Intensity") +
+      scale_fill_manual(values = c("Start" = "grey60", "End" = "red")) +
+      scale_color_manual(values = c("Start" = "black", "End" = "darkred")) +
+      labs(title = "Representative Single Trace: Start vs End Expansion (Smoothed)", subtitle = "Expanded Allele Region", x = "CAG Length", fill = "Timepoint", color = "Timepoint") +
+      overlay_theme
+    
+    print(p_sm_overlay)
+    ggsave(file.path(overview_dir, "Representative_Start_vs_End_Overlay_Smoothed.tiff"), p_sm_overlay, width = 12, height = 8, compression = "lzw")
+    
+    # --- 4B: Plot Absolute Overlay (Jagged) ---
+    p_jg_overlay <- ggplot(jagged_overlay_data, aes(x = CAG, y = Norm_Height)) +
+      geom_area(aes(fill = Timepoint_Label), alpha = 0.2, position = "identity") +
+      geom_line(aes(color = Timepoint_Label), linewidth = 0.4, alpha = 0.7, position = "identity") +
+      # Add the End Apex dotted line
+      geom_vline(data = apex_jg, aes(xintercept = End_Apex), linetype = "dotted", color = "darkred", linewidth = 0.6) +
+      facet_wrap(vars(Display_Label), ncol = 1, strip.position = "right") +
+      scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05)), breaks = NULL, name = "Normalized Intensity") +
+      scale_fill_manual(values = c("Start" = "grey60", "End" = "red")) +
+      scale_color_manual(values = c("Start" = "black", "End" = "darkred")) +
+      labs(title = "Representative Single Trace: Start vs End Expansion (Jagged)", subtitle = "Expanded Allele Region (Rounded Spikes)", x = "CAG Length", fill = "Timepoint", color = "Timepoint") +
+      overlay_theme
+    
+    print(p_jg_overlay)
+    ggsave(file.path(overview_dir, "Representative_Start_vs_End_Overlay_Jagged.tiff"), p_jg_overlay, width = 12, height = 8, compression = "lzw")
+    
+    # --- 4C: Plot ALIGNED Shift Overlay (Smoothed) ---
+    aligned_smooth_data <- smooth_overlay_data %>%
+      dplyr::left_join(apex_sm %>% dplyr::select(Display_Label, Start_Apex), by = "Display_Label") %>%
+      dplyr::mutate(CAG_Shift = CAG - Start_Apex)
+    
+    p_aligned_sm <- ggplot(aligned_smooth_data, aes(x = CAG_Shift, y = Norm_Height)) +
+      geom_area(aes(fill = Timepoint_Label), alpha = 0.4, position = "identity") +
+      geom_line(aes(color = Timepoint_Label), linewidth = 0.5) +
+      facet_wrap(vars(Display_Label), ncol = 1, strip.position = "right") +
+      scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05)), breaks = NULL, name = "Normalized Intensity") +
+      # Anchor 0 line (Start)
+      geom_vline(xintercept = 0, linetype = "dashed", color = "grey50", linewidth = 0.4) +
+      # New End Apex dotted line
+      geom_vline(data = apex_sm, aes(xintercept = End_Shift), linetype = "dotted", color = "darkred", linewidth = 0.6) +
+      scale_fill_manual(values = c("Start" = "grey60", "End" = "red")) +
+      scale_color_manual(values = c("Start" = "black", "End" = "darkred")) +
+      labs(title = "Aligned Single Trace: Expansion Shift (Smoothed)", subtitle = "Baselines anchored at 0 (Relative Change in CAG Length)", x = "Change in CAG Length (Δ)", fill = "Timepoint", color = "Timepoint") +
+      overlay_theme
+    
+    print(p_aligned_sm)
+    ggsave(file.path(overview_dir, "Representative_Aligned_Shift_Overlay_Smoothed.tiff"), p_aligned_sm, width = 12, height = 8, compression = "lzw")
+    
+    # --- 4D: Plot ALIGNED Shift Overlay (Jagged) ---
+    aligned_jagged_data <- jagged_overlay_data %>%
+      dplyr::left_join(apex_jg %>% dplyr::select(Display_Label, Start_Apex), by = "Display_Label") %>%
+      dplyr::mutate(CAG_Shift = CAG - Start_Apex)
+    
+    p_aligned_jg <- ggplot(aligned_jagged_data, aes(x = CAG_Shift, y = Norm_Height)) +
+      geom_area(aes(fill = Timepoint_Label), alpha = 0.2, position = "identity") +
+      geom_line(aes(color = Timepoint_Label), linewidth = 0.4, alpha = 0.7, position = "identity") +
+      facet_wrap(vars(Display_Label), ncol = 1, strip.position = "right") +
+      scale_y_continuous(limits = c(0, 1), expand = expansion(mult = c(0, 0.05)), breaks = NULL, name = "Normalized Intensity") +
+      # Anchor 0 line (Start)
+      geom_vline(xintercept = 0, linetype = "dashed", color = "grey50", linewidth = 0.4) +
+      # New End Apex dotted line
+      geom_vline(data = apex_jg, aes(xintercept = End_Shift), linetype = "dotted", color = "darkred", linewidth = 0.6) +
+      scale_fill_manual(values = c("Start" = "grey60", "End" = "red")) +
+      scale_color_manual(values = c("Start" = "black", "End" = "darkred")) +
+      labs(title = "Aligned Single Trace: Expansion Shift (Jagged)", subtitle = "Baselines anchored at 0 (Relative Change in CAG Length)", x = "Change in CAG Length (Δ)", fill = "Timepoint", color = "Timepoint") +
+      overlay_theme
+    
+    print(p_aligned_jg)
+    ggsave(file.path(overview_dir, "Representative_Aligned_Shift_Overlay_Jagged.tiff"), p_aligned_jg, width = 12, height = 8, compression = "lzw")
+  }
 }
 
 #=============================================================================#
@@ -1294,7 +1445,7 @@ for (geno in unique_genos) {
   close(pb)
   if(length(pdf_pages_list) > 0) {
     safe_geno <- gsub("[^A-Za-z0-9_]", "_", geno)
-    fname <- paste0("TraceReport_Smoothed_", safe_geno, ".pdf")
+    fname <- paste0("Smoothed_", safe_geno, ".pdf")
     image_write(image_join(pdf_pages_list), path = file.path(pdf_dir_smooth, fname), format = "pdf")
   }
 }
