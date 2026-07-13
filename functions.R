@@ -13,6 +13,22 @@
 #=============================================================================#
 # SECTION 0: HELPER & UTILITY FUNCTIONS
 #=============================================================================#
+# --- 1. Environment Setup ---####
+setup_environment <- function() {
+  # Bioconductor packages notoriously overwrite basic dplyr functions. 
+  # This locks them in so your data wrangling never crashes.
+  if (!requireNamespace("conflicted", quietly = TRUE)) install.packages("conflicted")
+  library(conflicted)
+  conflicts_prefer(dplyr::filter)
+  conflicts_prefer(dplyr::select)
+  conflicts_prefer(dplyr::rename)
+  conflicts_prefer(dplyr::mutate)
+  conflicts_prefer(base::as.factor)    # Add this
+  conflicts_prefer(base::as.numeric)   # Add this too — same issue likely lurks here
+  conflicts_prefer(base::intersect)    # Already used explicitly but worth locking in
+  conflicts_prefer(base::setdiff)
+}
+
 
 `%||%` <- function(lhs, rhs) if (!is.null(lhs)) lhs else rhs
 
@@ -1613,8 +1629,7 @@ run_statistical_model <- function(data_summary, config, response_variable) {
       Decision = if (aic_unequal < (aic_equal - 2)) c("Runner-up", "Winner (Selected)") else c("Winner (Selected)", "Runner-up")
     )
     model_results[["Test_Round4_Variance_AIC"]] <- variance_test_df
-    # ---------------------------------------------------
-    
+
     if (aic_unequal < (aic_equal - 2)) {
       message(paste("...Result: Unequal Variance model wins! (AIC drop:", round(aic_equal - aic_unequal, 1), ")"))
       interpretation_log <- c(interpretation_log, "Result: Unequal Variance model (gls/lme) selected via AIC.")
@@ -1635,8 +1650,28 @@ run_statistical_model <- function(data_summary, config, response_variable) {
       Decision = c("Winner (Selected)", "Failed to Converge")
     )
     model_results[["Test_Round4_Variance_AIC"]] <- variance_test_df
-    # -----------------------------------------------------------
   }
+  
+  # --- LOG THE UNIVERSAL FINAL FORMULA ---
+  try({
+    # 1. Extract the base formula safely (collapsing multi-line formulas into one string)
+    final_form_str <- paste(trimws(deparse(stats::formula(final_model_fit), width.cutoff = 500)), collapse = " ")
+    
+    # 2. nlme::lme objects hide their random effects from the standard formula() call, so we append them manually
+    if (inherits(final_model_fit, "lme")) {
+      final_form_str <- paste(final_form_str, "| Random:", random_effect_string)
+    }
+    
+    # 3. If the Unequal Variance model won Round 4, append the variance structure to the log
+    if (!is.null(unequal_var_model) && identical(final_model_fit, unequal_var_model)) {
+      final_form_str <- paste(final_form_str, "| Variance: varIdent(form = ~ 1 |", primary_group, ")")
+    }
+    
+    # 4. Push to the log
+    interpretation_log <- c(interpretation_log, "--------------------------------------------------")
+    interpretation_log <- c(interpretation_log, paste(">>> FINAL DEPLOYED MODEL FORMULA:", final_form_str))
+    interpretation_log <- c(interpretation_log, "--------------------------------------------------")
+  }, silent = TRUE)
   
   # --- 4. Results Extraction & Formatting ---
   format_table <- function(df) {
@@ -2210,6 +2245,45 @@ validate_config <- function(config, check_external_files = FALSE) {
     }
   }
   
+  # --- CHECK THAT MODEL VARS ARE IN GROUPING VARS ---
+  message("...verifying model effects survive data summarization.")
+  
+  # 1. Define the pool of variables that survive the Script 01 summarization
+  grouping_pool <- unique(c(
+    key_vars$time_variable,
+    key_vars$primary_group_var,
+    key_vars$secondary_group_var,
+    key_vars$optional_grouping_var,
+    key_vars$repeated_measure_var,
+    key_vars$optional_crossed_effect
+  ))
+  grouping_pool <- grouping_pool[!is.null(grouping_pool) & grouping_pool != 'null']
+  
+  # 2. Extract all random effects required by the model
+  re_effects_raw <- c()
+  if (!is.null(key_vars$nesting_structure) && key_vars$nesting_structure != 'null' && key_vars$nesting_structure != "") {
+    re_effects_raw <- trimws(unlist(strsplit(key_vars$nesting_structure, "[/:]")))
+  } else {
+    re_effects_raw <- c(key_vars$repeated_measure_var, key_vars$optional_random_effect)
+  }
+  re_effects_clean <- unique(re_effects_raw[!is.null(re_effects_raw) & re_effects_raw != 'null'])
+  
+  # 3. Combine fixed and random effects (fx_effects_clean is calculated just above this in your script)
+  fx_effects_clean_safe <- if (exists("fx_effects_clean")) fx_effects_clean else c()
+  all_model_vars <- unique(c(fx_effects_clean_safe, re_effects_clean))
+  
+  # 4. Check if any model variable is missing from the grouping pool
+  missing_from_pool <- setdiff(all_model_vars, grouping_pool)
+  
+  if (length(missing_from_pool) > 0) {
+    val_stop("key_variables: The following modeling variables are NOT assigned to a grouping role:\n",
+             paste(missing_from_pool, collapse = ", "), "\n\n",
+             "Any variable used in 'model_fixed_effects', 'optional_random_effect', or 'nesting_structure' ",
+             "MUST also be assigned to a structural role (e.g., primary_group_var, secondary_group_var, ",
+             "optional_grouping_var, optional_crossed_effect, or repeated_measure_var) ",
+             "so it is not dropped when the data is summarized.")
+  }
+  
   # --- 5. Validate `parameters` ---
   bl_level <- config$parameters$baseline_grouping_level
   if (!bl_level %in% c("group", "genotype", "global_control", "custom")) {
@@ -2366,8 +2440,15 @@ apply_smart_palette <- function(p, color_var_name) {
   
   # 2. Apply it to the plot
   if (!is.null(active_pal)) {
-    p <- p + 
-      scale_color_manual(values = unname(active_pal)) + 
+    
+    n_groups <- length(unique(p$data[[color_var_name]]))
+    
+    if (length(active_pal) < n_groups) {
+      active_pal <- grDevices::colorRampPalette(active_pal)(n_groups)
+    }
+    
+    p <- p +
+      scale_color_manual(values = unname(active_pal)) +
       scale_fill_manual(values = unname(active_pal))
   }
   
@@ -2646,3 +2727,533 @@ apply_renaming_and_factors <- function(df, config) {
   
   df
 }
+
+generate_rounded_peaks <- function(df, width_cag = 0.45, resolution = 51) {
+  if(nrow(df) == 0) return(df)
+  
+  # 1. High-resolution grid for perfectly smooth drawing
+  bell_curve <- data.frame(
+    offset = seq(-width_cag, width_cag, length.out = resolution)
+  )
+  
+  # 2. Gaussian curve math (Authentic fragment peak shape)
+  # Setting sigma to width/3 ensures the tails smoothly hit 0 at the edges
+  sigma <- width_cag / 3
+  bell_curve$mult <- exp(-0.5 * (bell_curve$offset / sigma)^2)
+  
+  # 3. Apply this shape to every single row in the data
+  df %>%
+    merge(bell_curve, by = NULL) %>% 
+    dplyr::mutate(
+      CAG = CAG + offset,
+      Height = Height * mult
+    ) %>%
+    dplyr::arrange(CAG) %>%
+    dplyr::select(-offset, -mult)
+}
+
+#=============================================================================#
+# PART 1: DEFINING ROBUST STATISTICAL FUNCTIONS                           #####
+#=============================================================================#
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+# 1A. Helper: Calculate R-Squared
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+calc_population_r2 <- function(model, data, y_col = "slope_val") {
+  tryCatch({
+    if(inherits(model, "lmerMod")) {
+      preds <- predict(model, newdata = data, re.form = NA)
+    } else {
+      preds <- predict(model, newdata = data)
+    }
+    r2 <- cor(data[[y_col]], preds, use = "complete.obs")^2
+    return(r2)
+  }, error = function(e) return(NA))
+}
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+# 1B. Helper: Quadratic Slope Crossing Calculation (NEW)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+get_quad_crossing_point <- function(model_lin, model_quad, data, divergence_percent = 0.20) {
+  # 1. Get Linear Slope (m)
+  # We use the fixed effect for 'baseline_cag'
+  m <- fixef(model_lin)["baseline_cag"]
+  
+  # 2. Get Quadratic Parameters (ax^2 + bx + c)
+  cf_q <- fixef(model_quad)
+  a <- cf_q[grep("I\\(", names(cf_q))] # Coefficient for x^2
+  b <- cf_q["baseline_cag"]            # Coefficient for x
+  
+  # Safety: If curve is concave (upside down U) or flat, no acceleration threshold exists.
+  if(length(a) == 0 || a <= 0) return(NA)
+  
+  # 3. Solve for X where Quad Slope > Linear Slope
+  # 2ax + b = m  =>  2ax = m - b  =>  x = (m - b) / 2a
+  crossing_x <- (m - b) / (2 * a)
+  
+  # 4. Return
+  return(as.numeric(crossing_x))
+}
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+# 1C. Helper: AIC Profile Scan Plotter (ROBUST VERSION)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+generate_aic_profile_plot <- function(hockey_scan_df, seg1_scan_df, 
+                                      aic_lin, aic_quad, aic_3ph, aic_exp, aic_pow, aic_loglin) {
+  
+  # 1. Clean the scan dataframes safely
+  seg1_scan_df <- if (!is.null(seg1_scan_df)) na.omit(seg1_scan_df) else data.frame()
+  hockey_scan_df <- if (!is.null(hockey_scan_df)) na.omit(hockey_scan_df) else data.frame()
+  
+  # If ALL models failed (very rare), abort to prevent a blank square
+  if(nrow(seg1_scan_df) == 0 && nrow(hockey_scan_df) == 0 && 
+     is.infinite(aic_lin) && is.infinite(aic_quad)) return(NULL)
+  
+  # 2. Define Reference Lines Dataframe for Legend
+  ref_lines <- data.frame(
+    Model = c("Linear", "Quadratic", "3-Phase (Free)", "Exponential", "Variable Power", "Log-Linear (Y-Transformed)"),
+    AIC = c(aic_lin, aic_quad, aic_3ph, aic_exp, aic_pow, aic_loglin),
+    Color = c("black", "forestgreen", "orange", "magenta", "darkcyan", "brown4"),
+    Type = c("dotted", "longdash", "dashed", "dotdash", "twodash", "solid")
+  )
+  
+  # Remove Infinite AICs (failed models)
+  ref_lines <- ref_lines[is.finite(ref_lines$AIC), ]
+  
+  # 3. Base plot with horizontal reference lines
+  p_scan <- ggplot() +
+    geom_hline(data = ref_lines, aes(yintercept = AIC, color = Model, linetype = Model), linewidth = 0.8, alpha = 0.8)
+  
+  # 4. Add 2-Phase scan ONLY if valid data exists
+  if (nrow(seg1_scan_df) > 0) {
+    p_scan <- p_scan +
+      geom_line(data = seg1_scan_df, aes(x = Threshold, y = AIC, color = "2-Phase (Free)", linetype = "2-Phase (Free)"), linewidth = 0.8) +
+      geom_point(data = seg1_scan_df, aes(x = Threshold, y = AIC, color = "2-Phase (Free)"), size = 1.5, alpha = 0.6) +
+      geom_point(data = seg1_scan_df[which.min(seg1_scan_df$AIC),], aes(x = Threshold, y = AIC), color = "blue", size = 4, shape = 19)
+  }
+  
+  # 5. Add Hockey scan ONLY if valid data exists
+  if (nrow(hockey_scan_df) > 0) {
+    p_scan <- p_scan +
+      geom_line(data = hockey_scan_df, aes(x = Threshold, y = AIC, color = "Hockey Stick (Fixed)", linetype = "Hockey Stick (Fixed)"), linewidth = 0.8) +
+      geom_point(data = hockey_scan_df, aes(x = Threshold, y = AIC, color = "Hockey Stick (Fixed)"), size = 1.5, alpha = 0.6) +
+      geom_point(data = hockey_scan_df[which.min(hockey_scan_df$AIC),], aes(x = Threshold, y = AIC), color = "purple", size = 4, shape = 19)
+  }
+  
+  # 6. Scales and Labels
+  p_scan <- p_scan + 
+    scale_color_manual(name = "Model", values = c(
+      "Linear" = "black", 
+      "Quadratic" = "forestgreen", 
+      "3-Phase (Free)" = "orange", 
+      "Exponential" = "magenta", 
+      "Variable Power" = "darkcyan", 
+      "Log-Linear (Y-Transformed)" = "brown4", 
+      "2-Phase (Free)" = "blue", 
+      "Hockey Stick (Fixed)" = "purple"
+    )) +
+    scale_linetype_manual(name = "Model", values = c(
+      "Linear" = "dotted", 
+      "Quadratic" = "longdash", 
+      "3-Phase (Free)" = "dashed", 
+      "Exponential" = "dotdash",
+      "Variable Power" = "twodash", 
+      "Log-Linear (Y-Transformed)" = "solid", 
+      "2-Phase (Free)" = "solid", 
+      "Hockey Stick (Fixed)" = "solid"
+    )) +
+    labs(title = "AIC Profile Scan", subtitle = "Lower AIC = Better Fit", x = "Tested Threshold (CAG)", y = "AIC") +
+    theme_publication() + 
+    theme(legend.position = "right", legend.direction = "vertical")
+  
+  return(p_scan)
+}
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+# 1D. MAIN FUNCTION: BRUTE FORCE MIXED EFFECTS TOURNAMENT (7-WAY)
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+get_robust_mixed_analysis <- function(df, x_col, y_col, group_var, n_boot = 500, divergence_percent = 0.20, boundary_buffer = 10) { 
+  work_df <- data.frame(baseline_cag = df[[x_col]], slope_val = df[[y_col]], group_id = df[[group_var]]) 
+  work_df <- na.omit(work_df)
+  min_valid <- min(work_df$baseline_cag) + boundary_buffer
+  max_valid <- max(work_df$baseline_cag) - boundary_buffer
+  
+  # Grids for Scanning
+  scan_seq <- unique(round(seq(min_valid, max_valid, length.out = 50))) 
+  scan_exp_k <- seq(0.01, 0.15, length.out = 20)  
+  scan_pow_p <- seq(1.5, 5.0, length.out = 20)    
+  
+  # Global Control to Silence Boundary/Singular Warnings
+  safe_ctrl <- lmerControl(
+    check.conv.singular = .makeCC(action = "ignore", tol = 1e-4),
+    check.scaleX = "ignore",
+    check.nobs.vs.nlev = "ignore",
+    check.nobs.vs.rankZ = "ignore",
+    check.nobs.vs.nRE = "ignore",
+    optCtrl = list(print_level = 0) # Tells the optimizer to shut up
+  )
+  
+  # Helper: Safe LMER Fit (SILENCED)
+  fit_lmer_safe <- function(formula, data) {
+    tryCatch({
+      m <- suppressWarnings(suppressMessages({
+        lmer(formula, data = data, REML = FALSE, control = safe_ctrl)
+      }))
+      
+      if("(Intercept)" %in% names(fixef(m)) && fixef(m)["(Intercept)"] < 0) {
+        f_char <- deparse(formula)
+        f_new <- as.formula(paste(f_char, "- 1"))
+        m <- suppressWarnings(suppressMessages({
+          lmer(f_new, data = data, REML = FALSE, control = safe_ctrl)
+        }))
+      }
+      return(m)
+    }, error = function(e) return(NULL))
+  }
+  
+  # --- 1. Standard Models ---
+  fit_lin <- fit_lmer_safe(slope_val ~ baseline_cag + (1 | group_id), work_df)
+  fit_quad <- fit_lmer_safe(slope_val ~ baseline_cag + I(baseline_cag^2) + (1 | group_id), work_df)
+  
+  # --- 2. 2-Phase Free ---
+  best_seg1_aic <- Inf; best_seg1_thresh <- NA; fit_seg1_best <- NULL
+  seg1_scan_df <- data.frame(Threshold = scan_seq, AIC = NA)
+  
+  for(i in 1:length(scan_seq)) {
+    t <- scan_seq[i]
+    work_df$term_diff <- pmax(work_df$baseline_cag - t, 0)
+    fit <- fit_lmer_safe(slope_val ~ baseline_cag + term_diff + (1 | group_id), work_df)
+    if(!is.null(fit)) {
+      cf <- fixef(fit)
+      has_int <- "(Intercept)" %in% names(cf); s1 <- if(has_int) cf["baseline_cag"] else cf[1]; s_diff <- if(has_int) cf["term_diff"] else cf[2]
+      # FIX: Added is.na() checks
+      if(!is.na(s1) && !is.na(s_diff) && s1 >= 0 && (s1 + s_diff) > s1) {
+        this_aic <- AIC(fit)
+        seg1_scan_df$AIC[i] <- this_aic
+        if(this_aic < best_seg1_aic) { best_seg1_aic <- this_aic; best_seg1_thresh <- t; fit_seg1_best <- fit }
+      }
+    }
+  }
+  
+  # --- 3. Hockey Stick ---
+  best_hockey_aic <- Inf; best_hockey_thresh <- NA; fit_hockey_best <- NULL
+  hockey_scan_df <- data.frame(Threshold = scan_seq, AIC = NA)
+  
+  for(i in 1:length(scan_seq)) {
+    t <- scan_seq[i]
+    work_df$hs_term <- pmax(work_df$baseline_cag - t, 0)
+    fit <- fit_lmer_safe(slope_val ~ hs_term + (1 | group_id), work_df)
+    if(!is.null(fit)) {
+      cf <- fixef(fit); slope_val <- cf[length(cf)]
+      # FIX: Added is.na() check
+      if(!is.na(slope_val) && slope_val > 0) {
+        this_aic <- AIC(fit)
+        hockey_scan_df$AIC[i] <- this_aic
+        if(this_aic < best_hockey_aic) { best_hockey_aic <- this_aic; best_hockey_thresh <- t; fit_hockey_best <- fit }
+      }
+    }
+  }
+  
+  # --- 4. 3-Phase Free ---
+  best_seg2_aic <- Inf; fit_seg2_best <- NULL; thresh_seg2_vec <- c(NA, NA)
+  if(nrow(work_df) >= 10) { 
+    for(t1 in scan_seq) {
+      for(t2 in scan_seq) {
+        if(t2 > (t1 + 4)) {
+          work_df$d1 <- pmax(work_df$baseline_cag - t1, 0)
+          work_df$d2 <- pmax(work_df$baseline_cag - t2, 0)
+          
+          fit <- tryCatch({ 
+            suppressWarnings(suppressMessages(
+              lmer(slope_val ~ baseline_cag + d1 + d2 + (1 | group_id), data = work_df, REML = FALSE, control = safe_ctrl)
+            ))
+          }, error = function(e) NULL)          
+          if(is.null(fit)) fit <- tryCatch({ lm(slope_val ~ baseline_cag + d1 + d2, data = work_df) }, error = function(e) NULL)
+          if(is.null(fit)) next
+          
+          if(inherits(fit, "lmerMod")) { if(fixef(fit)[1] < 0) fit <- lmer(slope_val ~ baseline_cag + d1 + d2 - 1 + (1 | group_id), data = work_df, REML = FALSE, control = safe_ctrl) } 
+          else { if(coef(fit)[1] < 0) fit <- lm(slope_val ~ baseline_cag + d1 + d2 - 1, data = work_df) }
+          
+          cf <- if(inherits(fit, "lmerMod")) fixef(fit) else coef(fit)
+          has_int <- "(Intercept)" %in% names(cf); idx <- if(has_int) 2 else 1
+          s1 <- if("baseline_cag" %in% names(cf)) cf["baseline_cag"] else cf[idx]
+          s_d1 <- if("d1" %in% names(cf)) cf["d1"] else cf[idx+1]
+          s_d2 <- if("d2" %in% names(cf)) cf["d2"] else cf[idx+2]
+          
+          # FIX: Added is.na() checks
+          if(!is.na(s1) && !is.na(s_d1) && !is.na(s_d2) && s1 >= 0 && (s1+s_d1) > s1 && (s1+s_d1+s_d2) > (s1+s_d1)) {
+            if(AIC(fit) < best_seg2_aic) { best_seg2_aic <- AIC(fit); fit_seg2_best <- fit; thresh_seg2_vec <- c(t1, t2) }
+          }
+        }
+      }
+    }
+  }
+  
+  # --- 5. Exponential Scan ---
+  best_exp_aic <- Inf; best_exp_k <- NA; fit_exp_best <- NULL
+  cag_min <- min(work_df$baseline_cag)
+  
+  for(k in scan_exp_k) {
+    work_df$exp_term <- exp(k * (work_df$baseline_cag - cag_min))
+    fit <- fit_lmer_safe(slope_val ~ exp_term + (1 | group_id), work_df)
+    if(!is.null(fit)) {
+      cf <- fixef(fit); b_val <- cf[length(cf)]
+      # FIX: Added is.na() check
+      if(!is.na(b_val) && b_val > 0) {
+        if(AIC(fit) < best_exp_aic) { best_exp_aic <- AIC(fit); best_exp_k <- k; fit_exp_best <- fit }
+      }
+    }
+  }
+  
+  # --- 6. Variable Power Scan ---
+  best_pow_aic <- Inf; best_pow_p <- NA; fit_pow_best <- NULL
+  for(p in scan_pow_p) {
+    work_df$pow_term <- work_df$baseline_cag^p
+    fit <- fit_lmer_safe(slope_val ~ pow_term + (1 | group_id), work_df)
+    if(!is.null(fit)) {
+      cf <- fixef(fit); b_val <- cf[length(cf)]
+      # FIX: Added is.na() check
+      if(!is.na(b_val) && b_val > 0) {
+        if(AIC(fit) < best_pow_aic) { best_pow_aic <- AIC(fit); best_pow_p <- p; fit_pow_best <- fit }
+      }
+    }
+  }
+  
+  # --- 9. Log-Linear Scan (Y-Transformed) ---
+  min_val <- min(work_df$slope_val, na.rm=TRUE)
+  y_shift <- if(min_val <= 0) abs(min_val) + 0.001 else 0
+  
+  work_df$log_y <- log(work_df$slope_val + y_shift)
+  fit_loglin <- tryCatch({
+    suppressWarnings(suppressMessages({
+      lmer(log_y ~ baseline_cag + (1 | group_id), data = work_df, REML = FALSE, control = safe_ctrl)
+    }))
+  }, error = function(e) NULL)
+  
+  aic_loglin <- Inf
+  r2_loglin <- NA
+  
+  if(!is.null(fit_loglin)) {
+    log_preds <- predict(fit_loglin, newdata = work_df, re.form = NA)
+    orig_preds <- exp(log_preds) - y_shift
+    
+    rss <- sum((work_df$slope_val - orig_preds)^2, na.rm = TRUE)
+    n <- nrow(work_df)
+    k <- length(fixef(fit_loglin)) + 1 
+    
+    aic_loglin <- n * log(rss/n) + 2 * k + n + n * log(2 * pi)
+    r2_loglin <- cor(work_df$slope_val, orig_preds, use="complete.obs")^2
+  }
+  
+  # --- 7. AIC Comparison ---
+  aic_lin <- if(!is.null(fit_lin)) AIC(fit_lin) else Inf
+  aic_quad <- if(!is.null(fit_quad)) AIC(fit_quad) else Inf
+  aic_seg1 <- best_seg1_aic
+  aic_hockey <- best_hockey_aic
+  aic_seg2 <- best_seg2_aic 
+  aic_exp <- best_exp_aic
+  aic_pow <- best_pow_aic
+  
+  # --- 8. R-Squared ---
+  r2_lin <- if(!is.null(fit_lin)) calc_population_r2(fit_lin, work_df) else NA
+  r2_quad <- if(!is.null(fit_quad)) calc_population_r2(fit_quad, work_df) else NA
+  r2_seg1 <- if(!is.null(fit_seg1_best)) calc_population_r2(fit_seg1_best, work_df) else NA
+  r2_hockey <- if(!is.null(fit_hockey_best)) calc_population_r2(fit_hockey_best, work_df) else NA
+  r2_seg2 <- if(!is.null(fit_seg2_best)) calc_population_r2(fit_seg2_best, work_df) else NA
+  r2_exp <- if(!is.null(fit_exp_best)) calc_population_r2(fit_exp_best, work_df) else NA
+  r2_pow <- if(!is.null(fit_pow_best)) calc_population_r2(fit_pow_best, work_df) else NA
+  
+  # --- 9. Determine Winner ---
+  thresh_quad <- if(!is.null(fit_lin) && !is.null(fit_quad)) get_quad_crossing_point(fit_lin, fit_quad, work_df, divergence_percent) else NA
+  
+  best_model <- "Linear"; best_aic <- aic_lin; raw_thresh <- NA
+  
+  if (aic_quad < (best_aic - 2)) { best_model <- "Quadratic"; best_aic <- aic_quad; raw_thresh <- thresh_quad }
+  if (aic_seg1 < (best_aic - 2)) { best_model <- "2-Phase (Free)"; best_aic <- aic_seg1; raw_thresh <- best_seg1_thresh }
+  if (aic_seg2 < (best_aic - 2)) { best_model <- "3-Phase (Free)"; best_aic <- aic_seg2; raw_thresh <- thresh_seg2_vec[1] }
+  #if (aic_hockey < (best_aic - 2)) { best_model <- "Hockey Stick"; best_aic <- aic_hockey; raw_thresh <- best_hockey_thresh }
+  if (aic_exp < (best_aic - 2))  { best_model <- "Exponential"; best_aic <- aic_exp; raw_thresh <- NA }
+  if (aic_pow < (best_aic - 2))  { best_model <- "Variable Power"; best_aic <- aic_pow; raw_thresh <- NA }
+  if (aic_loglin < (best_aic - 2)) { best_model <- "Log-Linear (Y-Transformed)"; best_aic <- aic_loglin; raw_thresh <- NA }
+  
+  threshold_est <- NA
+  if (!is.na(raw_thresh)) {
+    if (raw_thresh >= min_valid && raw_thresh <= max_valid) threshold_est <- raw_thresh else best_model <- paste0(best_model, " (Edge Artifact Ignored)")
+  }
+  
+  # --- 10. Bootstrapping ---
+  threshold_ci <- c(NA, NA, NA)
+  if (!is.na(threshold_est)) {
+    message(paste0("...Best fit: ", best_model, ". Bootstrapping..."))
+    boot_fn <- function(data, indices) {
+      d_b <- data[indices, ]
+      b_seq <- seq(min(d_b$baseline_cag, na.rm=T)+5, max(d_b$baseline_cag, na.rm=T)-5, length.out=15)
+      tryCatch({
+        val <- NA
+        if (grepl("Quadratic", best_model)) {
+          ml <- lmer(slope_val ~ baseline_cag + (1|group_id), data=d_b, REML=F, control=safe_ctrl)
+          mq <- lmer(slope_val ~ baseline_cag + I(baseline_cag^2) + (1|group_id), data=d_b, REML=F, control=safe_ctrl)
+          if(fixef(mq)[grep("I\\(", names(fixef(mq)))] > 0) val <- get_quad_crossing_point(ml, mq, d_b, divergence_percent)
+        } else if (grepl("Hockey", best_model)) {
+          best_a <- Inf; best_t <- NA
+          for(tb in b_seq) {
+            d_b$ht <- pmax(d_b$baseline_cag - tb, 0)
+            fb <- tryCatch(lmer(slope_val ~ ht + (1|group_id), data=d_b, REML=F, control=safe_ctrl), error=function(e) NULL)
+            if(!is.null(fb) && !is.na(fixef(fb)["ht"]) && fixef(fb)["ht"] > 0 && AIC(fb) < best_a) { best_a <- AIC(fb); best_t <- tb }
+          }
+          val <- best_t
+        } else if (grepl("2-Phase", best_model)) {
+          best_a <- Inf; best_t <- NA
+          for(tb in b_seq) {
+            d_b$td <- pmax(d_b$baseline_cag - tb, 0)
+            fb <- tryCatch(lmer(slope_val ~ baseline_cag + td + (1|group_id), data=d_b, REML=F, control=safe_ctrl), error=function(e) NULL)
+            if(!is.null(fb)) {
+              cf <- fixef(fb); if(!is.na(cf[2]) && !is.na(cf[3]) && cf[2] >= 0 && (cf[2]+cf[3]) > cf[2] && AIC(fb) < best_a) { best_a <- AIC(fb); best_t <- tb }
+            }
+          }
+          val <- best_t
+        } 
+        if (grepl("3-Phase", best_model)) val <- threshold_est 
+        return(val)
+      }, error = function(e) return(NA))
+    }
+    set.seed(123)
+    boot_obj <- boot(data = work_df, statistic = boot_fn, R = n_boot)
+    boot_vals <- na.omit(boot_obj$t)
+    if(length(boot_vals) > 50) {
+      threshold_ci <- quantile(boot_vals, probs = c(0.025, 0.5, 0.975))
+      threshold_est <- median(boot_vals, na.rm = TRUE)
+    }
+  }
+  
+  # --- 11. Generate Lines ---
+  x_seq <- seq(min(work_df$baseline_cag), max(work_df$baseline_cag), length.out = 200)
+  
+  # Initialize with Base Models
+  lines_df <- rbind(
+    data.frame(x = x_seq, y = predict(fit_lin, newdata = data.frame(baseline_cag=x_seq), re.form = NA), Model = "Linear"),
+    data.frame(x = x_seq, y = predict(fit_quad, newdata = data.frame(baseline_cag=x_seq), re.form = NA), Model = "Quadratic")
+  )
+  
+  if(!is.null(fit_seg1_best)) {
+    cf <- fixef(fit_seg1_best); int <- if("(Intercept)" %in% names(cf)) cf["(Intercept)"] else 0
+    s1 <- cf["baseline_cag"]; s_diff <- cf["term_diff"]
+    lines_df <- rbind(lines_df, data.frame(x=x_seq, y=int + s1*x_seq + s_diff*pmax(x_seq - best_seg1_thresh, 0), Model="2-Phase (Free)"))
+  }
+  if(!is.null(fit_hockey_best)) {
+    cf <- fixef(fit_hockey_best); int <- if("(Intercept)" %in% names(cf)) cf["(Intercept)"] else 0; s <- cf["hs_term"]
+    lines_df <- rbind(lines_df, data.frame(x=x_seq, y=int + s*pmax(x_seq - best_hockey_thresh, 0), Model="Hockey Stick"))
+  }
+  if(!is.null(fit_seg2_best)) {
+    cf <- fixef(fit_seg2_best); int <- if("(Intercept)" %in% names(cf)) cf["(Intercept)"] else 0
+    lines_df <- rbind(lines_df, data.frame(x=x_seq, y=int + cf["baseline_cag"]*x_seq + cf["d1"]*pmax(x_seq - thresh_seg2_vec[1], 0) + cf["d2"]*pmax(x_seq - thresh_seg2_vec[2], 0), Model="3-Phase (Free)"))
+  }
+  if(!is.null(fit_exp_best)) {
+    cf <- fixef(fit_exp_best); int <- if("(Intercept)" %in% names(cf)) cf["(Intercept)"] else 0; s <- cf["exp_term"]
+    lines_df <- rbind(lines_df, data.frame(x=x_seq, y=int + s*exp(best_exp_k * (x_seq - cag_min)), Model="Exponential"))
+  }
+  if(!is.null(fit_pow_best)) {
+    cf <- fixef(fit_pow_best); int <- if("(Intercept)" %in% names(cf)) cf["(Intercept)"] else 0; s <- cf["pow_term"]
+    lines_df <- rbind(lines_df, data.frame(x=x_seq, y=int + s*(x_seq^best_pow_p), Model="Variable Power"))
+  }
+  
+  if(!is.null(fit_loglin)) {
+    cf <- fixef(fit_loglin)
+    if(!exists("y_shift")) {
+      min_v <- min(work_df$slope_val, na.rm=TRUE)
+      y_shift <- if(min_v <= 0) abs(min_v) + 0.001 else 0
+    }
+    pred_vals <- exp(cf["(Intercept)"] + cf["baseline_cag"] * x_seq) - y_shift
+    pred_vals[is.infinite(pred_vals)] <- NA
+    lines_df <- rbind(lines_df, data.frame(x = x_seq, y = pred_vals, Model = "Log-Linear (Y-Transformed)"))
+  }
+  
+  lines_df$Model <- as.character(lines_df$Model)
+  
+  # --- 12. Get Equation of Best Model ---
+  winner_obj <- NULL
+  if (grepl("Linear", best_model)) winner_obj <- fit_lin
+  if (grepl("Quadratic", best_model)) winner_obj <- fit_quad
+  if (grepl("2-Phase", best_model)) winner_obj <- fit_seg1_best
+  if (grepl("3-Phase", best_model)) winner_obj <- fit_seg2_best
+  if (grepl("Hockey", best_model)) winner_obj <- fit_hockey_best
+  if (grepl("Exponential", best_model)) winner_obj <- fit_exp_best
+  if (grepl("Power", best_model)) winner_obj <- fit_pow_best
+  if (grepl("Log-Linear", best_model)) winner_obj <- fit_loglin
+  
+  best_equation <- get_model_equation(
+    model_obj = winner_obj, 
+    model_type = gsub(" \\(Edge Artifact Ignored\\)", "", best_model),
+    params = list(exp_k = best_exp_k, pow_p = best_pow_p, y_shift = y_shift),
+    thresholds = list(hockey = best_hockey_thresh, seg1 = best_seg1_thresh)
+  )
+  
+  return(list(
+    work_df = work_df, lines = lines_df, 
+    best_model = best_model, 
+    best_equation = best_equation, 
+    threshold_est = threshold_est, threshold_ci = threshold_ci, 
+    stats = list(AIC_lin = aic_lin, AIC_quad = aic_quad, AIC_seg1 = aic_seg1, AIC_seg2 = aic_seg2, AIC_hockey = aic_hockey, AIC_exp = aic_exp, AIC_pow = aic_pow, AIC_loglin = aic_loglin),
+    r2 = list(lin = r2_lin, quad = r2_quad, seg1 = r2_seg1, seg2 = r2_seg2, hockey = r2_hockey, exp = r2_exp, pow = r2_pow,loglin = r2_loglin),
+    thresholds = list(quad = thresh_quad, seg1 = best_seg1_thresh, seg2 = thresh_seg2_vec, hockey = best_hockey_thresh),
+    params = list(exp_k = best_exp_k, pow_p = best_pow_p, y_shift = y_shift), 
+    scans = list(hockey = hockey_scan_df, seg1 = seg1_scan_df),
+    models = list(Linear=fit_lin, Quadratic=fit_quad, `2-Phase (Free)`=fit_seg1_best, `3-Phase (Free)`=fit_seg2_best, `Hockey Stick`=fit_hockey_best, Exponential=fit_exp_best, `Variable Power`=fit_pow_best, `Log-Linear (Y-Transformed)`=fit_loglin)
+  ))
+}
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+# 1E. Helper: Extract Model Equation Strings
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+get_model_equation <- function(model_obj, model_type, params = NULL, thresholds = NULL) {
+  if(is.null(model_obj)) return(NA)
+  
+  # Extract fixed effects (round for readability)
+  cf <- fixef(model_obj)
+  fmt <- function(x) formatC(x, format = "g", digits = 4)
+  
+  eq_str <- ""
+  
+  if (model_type == "Linear") {
+    # y = Int + Slope*x
+    eq_str <- paste0("Rate = ", fmt(cf["(Intercept)"]), " + ", fmt(cf["baseline_cag"]), " * CAG")
+    
+  } else if (model_type == "Quadratic") {
+    # y = Int + b*x + a*x^2
+    a_term <- cf[grep("I\\(", names(cf))]
+    eq_str <- paste0("Rate = ", fmt(cf["(Intercept)"]), " + ", fmt(cf["baseline_cag"]), " * CAG + ", fmt(a_term), " * CAG^2")
+    
+  } else if (model_type == "Hockey Stick") {
+    # y = Int + Slope * (x - Threshold)+
+    t_val <- thresholds$hockey
+    eq_str <- paste0("Rate = ", fmt(cf["(Intercept)"]), " + ", fmt(cf["hs_term"]), " * max(0, CAG - ", round(t_val, 1), ")")
+    
+  } else if (model_type == "2-Phase (Free)") {
+    # y = Int + Slope1*x + SlopeDiff * (x - Threshold)+
+    t_val <- thresholds$seg1
+    eq_str <- paste0("Rate = ", fmt(cf["(Intercept)"]), " + ", fmt(cf["baseline_cag"]), " * CAG + ", 
+                     fmt(cf["term_diff"]), " * max(0, CAG - ", round(t_val, 1), ")")
+    
+  } else if (model_type == "Exponential") {
+    # y = Int + Coeff * exp(k * (x - min))
+    k_val <- params$exp_k
+    eq_str <- paste0("Rate = ", fmt(cf["(Intercept)"]), " + ", fmt(cf["exp_term"]), " * exp(", round(k_val, 4), " * (CAG - Min))")
+    
+  } else if (model_type == "Variable Power") {
+    # y = Int + Coeff * x^p
+    p_val <- params$pow_p
+    eq_str <- paste0("Rate = ", fmt(cf["(Intercept)"]), " + ", fmt(cf["pow_term"]), " * CAG^", round(p_val, 2))
+    
+  } else if (model_type == "Log-Linear (Y-Transformed)") {
+    # Model: ln(y + shift) = Int + Slope*x
+    # Display as: y = exp(Int + Slope*x) - shift
+    shift <- params$y_shift
+    eq_str <- paste0("Rate = exp(", fmt(cf["(Intercept)"]), " + ", fmt(cf["baseline_cag"]), " * CAG) - ", round(shift, 4))
+    
+  } else {
+    eq_str <- "Complex/Other"
+  }
+  
+  return(eq_str)
+}
+
+
