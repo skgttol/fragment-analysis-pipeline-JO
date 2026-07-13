@@ -66,8 +66,8 @@ if (!file.exists(func_path)) {
   if(file.exists("functions.R")) func_path <- "functions.R" else stop("functions.R not found.")
 }
 source(func_path)
-config <- yaml::read_yaml(here::here("config.yml")) # reload config file in case of updates
 output_dir <- latest_analysis_dir
+config <- yaml::read_yaml(here::here("config.yml"))
 
 if (!exists("modeling_data")) {
   stop(paste(

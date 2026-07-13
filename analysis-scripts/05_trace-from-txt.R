@@ -54,8 +54,7 @@ logr::log_print(paste("Successfully identified latest analysis directory:", base
 load(file.path(latest_analysis_dir, "processing_complete.RData"))
 latest_analysis_dir <- real_latest_analysis_dir
 
-config <- yaml::read_yaml(here::here("config.yml")) # reload config file in case of updates
-output_dir <- latest_analysis_dir
+config <- yaml::read_yaml(here::here("config.yml"))
 
 trace_output_dir <- file.path(latest_analysis_dir, "05_trace_plots")
 dir.create(trace_output_dir, showWarnings = FALSE)
@@ -883,8 +882,11 @@ if (file.exists(override_file_path)) {
   
   complete_bioreps <- valid_meta %>%
     group_by(bio_id) %>%
-    dplyr::mutate(geno_min_time = min(!!sym(time_var), na.rm = TRUE), geno_max_time = max(!!sym(time_var), na.rm = TRUE)) %>%
-    dplyr::filter(any(!!sym(time_var) == geno_min_time) & any(!!sym(time_var) == geno_max_time)) %>%
+    dplyr::mutate(
+      geno_min_time = min(!!sym(time_var), na.rm = TRUE), 
+      geno_max_time = max(!!sym(time_var), na.rm = TRUE)) %>%
+    group_by(bio_rep_id) %>%
+    dplyr::filter(any(!!sym(time_var) == geno_min_time) & any(!!sym(time_var) == geno_max_time) & geno_min_time != geno_max_time) %>%
     pull(bio_rep_id) %>% unique()
   
   selected_meta <- valid_meta %>%
@@ -893,8 +895,8 @@ if (file.exists(override_file_path)) {
     mutate(max_time_for_this_clone = max(!!sym(time_var), na.rm = TRUE)) %>%
     group_by(!!sym(primary_var)) %>% 
     arrange(desc(max_time_for_this_clone), !!sym(clone_var), as.numeric(as.character(!!sym(rep_var)))) %>%
-    dplyr::filter(!!sym(clone_var) == first(!!sym(clone_var))) %>%
-    dplyr::filter(if(any(!!sym(rep_var) == target_rep_id)) !!sym(rep_var) == target_rep_id else !!sym(rep_var) == first(!!sym(rep_var))) %>%
+    dplyr::filter(!!sym(clone_var) == dplyr::first(!!sym(clone_var))) %>%
+    dplyr::filter(if(any(!!sym(rep_var) == target_rep_id)) !!sym(rep_var) == target_rep_id else !!sym(rep_var) == dplyr::first(!!sym(rep_var))) %>%
     slice(1) %>% ungroup()
 }
 
@@ -956,7 +958,7 @@ if(nrow(plot_data_reps) > 0) {
   # =========================================================================== #
   if(nrow(baseline_split_smooth) > 0) {
     # --- 2A: Generate Smoothed Baseline Grid ---
-    p_wt_sm <- ggplot(baseline_split_smooth %>% filter(Panel_Region == "WT Allele"), aes(x = CAG, y = Norm_Height)) +
+    p_wt_sm <- ggplot(baseline_split_smooth %>% dplyr::filter(Panel_Region == "WT Allele"), aes(x = CAG, y = Norm_Height)) +
       geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
       facet_grid(rows = vars(Display_Label), switch = "y") +
       scale_x_continuous(limits = wt_lims, breaks = seq(0, 100, by = 5)) +

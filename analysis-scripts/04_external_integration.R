@@ -31,6 +31,8 @@ rdata_path <- file.path(latest_analysis_dir, "processing_complete.RData")
 if (!file.exists(rdata_path)) stop("CRITICAL ERROR: 'processing_complete.RData' not found.")
 
 load(rdata_path)
+config <- yaml::read_yaml(here::here("config.yml"))
+output_dir <- latest_analysis_dir
 
 # Ensure helper functions are attached
 if(file.exists("functions.R")) source("functions.R")

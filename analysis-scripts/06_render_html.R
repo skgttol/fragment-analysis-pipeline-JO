@@ -36,8 +36,6 @@ latest_analysis_dir <- max(target_dirs)
 rdata_path <- file.path(latest_analysis_dir, "processing_complete.RData")
 if (!file.exists(rdata_path)) stop("ERROR: 'processing_complete.RData' not found.")
 load(rdata_path)
-
-config <- yaml::read_yaml(here::here("config.yml")) # reload config file in case of updates
 output_dir <- latest_analysis_dir
 
 # (Re)open log to append

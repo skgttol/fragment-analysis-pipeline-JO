@@ -44,6 +44,8 @@ if (any(installed_packages == FALSE)) {
 
 invisible(lapply(packages, library, character.only = TRUE))
 
+setup_environment()
+
 ## 0B. Load Functions ----
 #-------------------------#
 if (!file.exists(here::here("functions.R"))) {
