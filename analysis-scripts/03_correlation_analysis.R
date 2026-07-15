@@ -25,7 +25,7 @@ packages <- c("tidyverse", "readxl", "here", "openxlsx", "broom.mixed",
               "ggpubr", "janitor", "yaml", "logr", "lme4", "lmerTest",
               "emmeans", "ggeffects", "patchwork", "gridExtra", "grid",
               "RColorBrewer", "gtable", "ggnewscale", "GGally", "reshape2", "MASS",
-              "ggrepel", "dendextend", "boot", "segmented") 
+              "ggrepel", "dendextend", "boot", "segmented", "stats") 
 
 installed_packages <- packages %in% rownames(utils::installed.packages())
 if (any(installed_packages == FALSE)) {
@@ -648,6 +648,18 @@ for (resp_var in response_vars) {
     y_axis_label <- response_labels[[resp_var]] %||% stringr::str_to_title(resp_var)
     short_resp_var <- response_shortnames[[resp_var]] %||% resp_var
     
+    # --- SMART PALETTE RESOLUTION ---
+    # Safely resolve the primary genotype palette across all possible workflow states
+    active_genotype_palette <- if (exists("x_var_palette") && !is.null(x_var_palette)) {
+      x_var_palette
+    } else if (exists("primary_palette") && !is.null(primary_palette)) {
+      primary_palette
+    } else if (exists("create_custom_palette") && exists("config")) {
+      create_custom_palette(modeling_data, config, primary_var)
+    } else {
+      NULL
+    }
+
     p_poly_preds <- ggplot() +
       geom_point(
         data = modeling_data, # 'modeling_data' from .RData
@@ -673,11 +685,13 @@ for (resp_var in response_vars) {
         aes(x = x, ymin = conf.low, ymax = conf.high, fill = !!sym(primary_var)),
         alpha = 0.2
       ) +
-      { if (!is.null(x_var_palette)) {
-        c(scale_color_manual(values = x_var_palette, name = "Genotype"),
-          scale_fill_manual(values = x_var_palette, name = "Genotype"))
-      }} +
-      facet_wrap(vars(!!sym(primary_var)), scales = "free_y", axes = "all") +
+      # --- CORRECTED MULTI-SCALE BLOCK (Using list instead of c) ---
+      { if (!is.null(active_genotype_palette)) {
+        list(
+          scale_color_manual(values = active_genotype_palette, name = "Genotype"),
+          scale_fill_manual(values = active_genotype_palette, name = "Genotype")
+        )
+      }} +    facet_wrap(vars(!!sym(primary_var)), scales = "free_y", axes = "all") +
       labs(
         title = paste("Exploratory Polynomial Model Fit:", y_axis_label),
         subtitle = "Lines show the non-linear (polynomial) model trend.",

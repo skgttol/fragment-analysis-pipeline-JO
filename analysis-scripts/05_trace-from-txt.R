@@ -49,9 +49,9 @@ if(length(target_dirs) == 0) stop("CRITICAL ERROR: No folders matching the '_Ana
 # Because your format is YYYY-MM-DD...HHMM, alphabetical max() safely finds the newest run
 real_latest_analysis_dir <- max(target_dirs)
 
-logr::log_print(paste("Successfully identified latest analysis directory:", basename(latest_analysis_dir)), console = TRUE)
+logr::log_print(paste("Successfully identified latest analysis directory:", basename(real_latest_analysis_dir)), console = TRUE)
 
-load(file.path(latest_analysis_dir, "processing_complete.RData"))
+load(file.path(real_latest_analysis_dir, "processing_complete.RData"))
 latest_analysis_dir <- real_latest_analysis_dir
 
 config <- yaml::read_yaml(here::here("config.yml"))
@@ -156,7 +156,9 @@ cols_to_keep <- c("fsa_filename",
                   config$key_variables$time_variable, 
                   config$key_variables$secondary_group_var,
                   config$key_variables$optional_grouping_var,
-                  config$key_variables$optional_crossed_effect)
+                  config$key_variables$optional_crossed_effect, 
+                  config$key_variables$additional_grouping_var,
+                  unlist(config$sample_name_columns))
 
 cols_to_keep <- cols_to_keep[!sapply(cols_to_keep, is.null)]
 cols_to_keep <- cols_to_keep[cols_to_keep != "null"]
@@ -205,12 +207,13 @@ if (exists("excluded_data") && nrow(excluded_data) > 0) {
 }
 all_metadata <- apply_renaming_and_factors(all_metadata, config)
 
-# --- ROBUST BIO_REP_ID CREATION ---
+# --- ROBUST BIO_ID CREATION ---
 potential_id_cols <- c(
   config$key_variables$primary_group_var, 
   config$key_variables$secondary_group_var, 
   config$key_variables$optional_grouping_var,
-  config$key_variables$optional_crossed_effect
+  config$key_variables$optional_crossed_effect,
+  config$key_variables$additional_grouping_var
 )
 
 potential_id_cols <- unique(potential_id_cols)
@@ -218,6 +221,7 @@ potential_id_cols <- unique(potential_id_cols)
 valid_id_cols <- potential_id_cols[
   !is.null(potential_id_cols) & potential_id_cols != "null" & potential_id_cols %in% colnames(all_metadata)
 ]
+
 peaks_annotated <- all_metadata %>%
   tidyr::unite("bio_id", dplyr::all_of(valid_id_cols), sep = "_", remove = FALSE) %>%
   apply_renaming_and_factors(config)
@@ -892,9 +896,10 @@ if (file.exists(override_file_path)) {
   selected_meta <- valid_meta %>%
     dplyr::filter(bio_rep_id %in% complete_bioreps) %>%
     group_by(!!sym(primary_var), !!sym(clone_var)) %>% 
-    mutate(max_time_for_this_clone = max(!!sym(time_var), na.rm = TRUE)) %>%
+    mutate(max_time_for_this_clone = max(!!sym(time_var), na.rm = FALSE)) %>%
+    mutate(min_time_for_this_clone = min(!!sym(time_var), na.rm = TRUE)) %>%
     group_by(!!sym(primary_var)) %>% 
-    arrange(desc(max_time_for_this_clone), !!sym(clone_var), as.numeric(as.character(!!sym(rep_var)))) %>%
+    arrange(min_time_for_this_clone !=0, min_time_for_this_clone, desc(max_time_for_this_clone), !!sym(clone_var), as.numeric(as.character(!!sym(rep_var)))) %>%
     dplyr::filter(!!sym(clone_var) == dplyr::first(!!sym(clone_var))) %>%
     dplyr::filter(if(any(!!sym(rep_var) == target_rep_id)) !!sym(rep_var) == target_rep_id else !!sym(rep_var) == dplyr::first(!!sym(rep_var))) %>%
     slice(1) %>% ungroup()
@@ -908,7 +913,7 @@ plot_data_reps <- optimized_data %>%
   dplyr::group_by(bio_rep_id) %>%
   dplyr::filter(pcr == min(pcr, na.rm = TRUE)) %>%
   dplyr::ungroup() %>%
-  dplyr::mutate(Display_Label = paste(!!sym(pub_label_col), "|", !!sym(clone_var)))
+  dplyr::mutate(Display_Label = paste(!!sym(pub_label_col), "|", !!sym(clone_var))) 
 
 # =========================================================================== #
 # PHASE 1: DATA PREP - BASELINE SPLIT (WT vs Expanded)

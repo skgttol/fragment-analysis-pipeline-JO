@@ -44,14 +44,14 @@ if (any(installed_packages == FALSE)) {
 
 invisible(lapply(packages, library, character.only = TRUE))
 
-setup_environment()
-
 ## 0B. Load Functions ----
 #-------------------------#
 if (!file.exists(here::here("functions.R"))) {
   stop("CRITICAL ERROR: 'functions.R' not found. Please ensure it is in the main project directory.")
 }
 source(here::here("functions.R"))
+setup_environment()
+
 
 ## 0C. Load Configuration and Find Latest Data ----
 #--------------------------------------------------#
@@ -536,7 +536,7 @@ for (resp_var in response_vars) {
       )
     
     p_traj <- p_traj + 
-      facet_wrap(vars(!!sym(label_exp)), scales = y_scale_setting, axes = "all") +
+      facet_wrap(vars(!!sym(primary_var)), scales = y_scale_setting, axes = "all") +
       labs(
         title = paste("Individual Profiles:", y_axis_label),
         subtitle = paste("Each colored line represents a unique", stringr::str_to_title(secondary_var)),
@@ -1967,7 +1967,7 @@ for (current_resp_var in response_vars) {
     label_map <- plot_data_clones %>% distinct(!!sym(primary_var), !!sym(label_pub))
     stats_annot <- stats_annot %>% left_join(label_map, by = primary_var) %>% dplyr::select(-dplyr::any_of(label_pub)) %>% restore_all_factors()
     
-    label_data_clones <- plot_data_clones %>% group_by(!!sym(primary_var), !!sym(label_pub), !!sym(color_var), !!sym(secondary_var)) %>% do({ sub_d <- .; mod <- stats::lm(as.formula(paste(current_resp_var, "~", time_var)), data = sub_d); max_t <- max(sub_d[[time_var]], na.rm = TRUE); pred_y <- predict(mod, newdata = setNames(data.frame(max_t), time_var)); data.frame(x_final = max_t, y_final = as.numeric(pred_y), clone_rank = first(sub_d$clone_rank)) }) %>% ungroup() %>% dplyr::rename(!!sym(time_var) := x_final, !!sym(current_resp_var) := y_final)
+    label_data_clones <- plot_data_clones %>% group_by(!!sym(primary_var), !!sym(label_pub), !!sym(color_var), !!sym(secondary_var)) %>% do({ sub_d <- .; mod <- stats::lm(as.formula(paste(current_resp_var, "~", time_var)), data = sub_d); max_t <- max(sub_d[[time_var]], na.rm = TRUE); pred_y <- predict(mod, newdata = setNames(data.frame(max_t), time_var)); data.frame(x_final = max_t, y_final = as.numeric(pred_y), clone_rank = dplyr::first(sub_d$clone_rank)) }) %>% ungroup() %>% dplyr::rename(!!sym(time_var) := x_final, !!sym(current_resp_var) := y_final)
     driver_df <- data.frame(G = names(driver_labels), D = unlist(driver_labels)) %>% setNames(c(primary_var, "Driver_Name"))
     label_data_clones <- label_data_clones %>% left_join(driver_df, by = primary_var) %>% mutate(is_driver = (as.character(!!sym(secondary_var)) == as.character(Driver_Name)), plot_label = ifelse(is_driver, paste0(!!sym(secondary_var), "*"), as.character(!!sym(secondary_var))), font_face = ifelse(is_driver, "bold", "plain")) %>% restore_all_factors()
     
