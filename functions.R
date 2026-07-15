@@ -19,14 +19,44 @@ setup_environment <- function() {
   # This locks them in so your data wrangling never crashes.
   if (!requireNamespace("conflicted", quietly = TRUE)) install.packages("conflicted")
   library(conflicted)
-  conflicts_prefer(dplyr::filter)
-  conflicts_prefer(dplyr::select)
-  conflicts_prefer(dplyr::rename)
-  conflicts_prefer(dplyr::mutate)
-  conflicts_prefer(base::as.factor)    # Add this
-  conflicts_prefer(base::as.numeric)   # Add this too — same issue likely lurks here
-  conflicts_prefer(base::intersect)    # Already used explicitly but worth locking in
-  conflicts_prefer(base::setdiff)
+# --- 1. Core Data Wrangling (Always prefer Tidyverse) ---
+conflicts_prefer(
+  dplyr::filter,
+  dplyr::select,
+  dplyr::lag,
+  dplyr::collapse,
+  dplyr::combine,
+  tidyr::expand,
+  tidyr::pack,
+  tidyr::unpack
+)
+
+# --- 2. Statistical Modeling (Always prefer lmerTest & lme4) ---
+conflicts_prefer(
+  lmerTest::lmer,
+  lmerTest::step,
+  lme4::lmList
+)
+
+# --- 3. Visualization & Clustering (Tailored for Script 4 & 5) ---
+conflicts_prefer(
+  dendextend::rotate,     # Protects your Ward clustering dendrograms
+  dendextend::labels,
+  cowplot::get_legend,    # Protects your publication figure grids
+  cowplot::get_title,
+  cowplot::align_plots,
+  cowplot::stamp,
+  patchwork::area
+)
+
+# --- 4. Quietly silence benign dataset/utility overlaps ---
+conflicts_prefer(
+  janitor::chisq.test,
+  janitor::fisher.test,
+  base::intersect,
+  base::setdiff,
+  .quiet = TRUE
+)
 }
 
 
@@ -1330,40 +1360,32 @@ run_statistical_model <- function(data_summary, config, response_variable) {
   
   if (!is.null(re_config_str) && re_config_str != "null" && re_config_str != "") {
     random_effect_vars <- trimws(unlist(strsplit(re_config_str, "[/:]")))
+    # Safely drop any variables that don't actually exist in the data
     random_effect_vars <- random_effect_vars[random_effect_vars %in% colnames(data_summary)]
-    re1 <- random_effect_vars[1]
-    re2 <- if (length(random_effect_vars) > 1) random_effect_vars[2] else NULL    
+    
     is_mixed_model <- length(random_effect_vars) > 0
-    is_nested_model <- grepl("/", re_config_str) && length(random_effect_vars) > 1
-    primary_re <- re1
-    structure_max <- re_config_str
+    is_nested_model <- length(random_effect_vars) > 1
+    
+    primary_re <- if(length(random_effect_vars) > 0) random_effect_vars[1] else NULL
+    
+    # Rebuild the max structure safely based only on columns that exist
+    structure_max <- paste(random_effect_vars, collapse = "/")
   } else {
     re1 <- cfg_vars$repeated_measure_var
     re2 <- cfg_vars$optional_random_effect
     
-    # Clean up "null" strings
     if(is.null(re1) || re1 == 'null') re1 <- NULL
     if(is.null(re2) || re2 == 'null') re2 <- NULL
     
-    # --- FIXED LOGIC ---
-    # It' a mixed model if EITHER re1 or re2 exists
     is_mixed_model <- !is.null(re1) || !is.null(re2)
-    
-    # It's a nested model only if BOTH exist
     is_nested_model <- !is.null(re1) && !is.null(re2)
     
     random_effect_vars <- c()
     if(!is.null(re1)) random_effect_vars <- c(random_effect_vars, re1)
     if(!is.null(re2)) random_effect_vars <- c(random_effect_vars, re2)
     
-    # Primary RE is re1 if it exists, otherwise it's re2
     primary_re <- re1 %||% re2
-    
-    structure_max <- if(is_nested_model) {
-      paste0(re1, "/", re2) 
-    } else {
-      primary_re # Will be the single random effect available
-    }
+    structure_max <- if(is_nested_model) paste0(re1, "/", re2) else primary_re 
   }
   
   # --- 2. Data Validation & UID Creation ---

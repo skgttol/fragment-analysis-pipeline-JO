@@ -35,10 +35,10 @@ pipeline_scripts <- c(
 # =============================================================================
 # PHASE 1: COLLECT & VERIFY ALL SCRIPTS
 # =============================================================================
-github_script_dir <- here::here()
-dir.create(github_script_dir, recursive = TRUE, showWarnings = FALSE)
-
 script_dir <- here::here("analysis-scripts")
+dir.create(script_dir, recursive = TRUE, showWarnings = FALSE)
+github_script_dir <- here::here()
+
 
 # Check if any scripts are physically missing locally
 missing_locally <- any(!file.exists(file.path(github_script_dir, pipeline_scripts)))
@@ -70,15 +70,35 @@ if (missing_locally || FORCE_UPDATE_SCRIPTS) {
 message("\n--- PHASE 2: EXECUTING PIPELINE ---")
 
 # Helper function to run a local script safely in an isolated environment
+# Helper function to run a local script safely in an isolated environment
 run_local_script <- function(script_name) {
   script_path <- file.path(script_dir, script_name)
   message("=======================================================")
   message(sprintf("▶ RUNNING: %s", script_name))
   message("=======================================================")
   
-  # Run in an isolated environment so variables don't bleed between scripts
-  source(script_path)
-  message(sprintf("✅ SUCCESS: %s completed cleanly.\n", script_name))
+  # 1. Take a snapshot of the environment BEFORE the script runs
+  pre_existing_vars <- ls(envir = .GlobalEnv)
+  
+  # 2. Run the script normally (local = FALSE)
+  # This ensures save.image(), saveRDS(), and your helper functions work perfectly.
+  source(script_path, local = FALSE)
+  
+  # 3. Identify all NEW variables created by this specific script
+  current_vars <- ls(envir = .GlobalEnv)
+  vars_to_delete <- setdiff(current_vars, pre_existing_vars)
+  
+  # 4. Aggressive Cleanup
+  # We delete ONLY the variables this script just made, leaving your base setup intact
+  rm(list = vars_to_delete, envir = .GlobalEnv) 
+  
+  gc(verbose = FALSE)                                 # Force Garbage Collection (Free RAM)
+  
+  # Suppress warnings for connections in case none are open
+  suppressWarnings(closeAllConnections())             # Close dangling file read/writes
+  graphics.off()                                      # Close all open plot devices
+  
+  message(sprintf("✅ SUCCESS: %s completed cleanly and memory was freed.\n", script_name))
 }
 
 # =============================================================================
