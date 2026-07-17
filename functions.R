@@ -19,44 +19,45 @@ setup_environment <- function() {
   # This locks them in so your data wrangling never crashes.
   if (!requireNamespace("conflicted", quietly = TRUE)) install.packages("conflicted")
   library(conflicted)
-# --- 1. Core Data Wrangling (Always prefer Tidyverse) ---
-conflicts_prefer(
-  dplyr::filter,
-  dplyr::select,
-  dplyr::lag,
-  dplyr::collapse,
-  dplyr::combine,
-  tidyr::expand,
-  tidyr::pack,
-  tidyr::unpack
-)
-
-# --- 2. Statistical Modeling (Always prefer lmerTest & lme4) ---
-conflicts_prefer(
-  lmerTest::lmer,
-  lmerTest::step,
-  lme4::lmList
-)
-
-# --- 3. Visualization & Clustering (Tailored for Script 4 & 5) ---
-conflicts_prefer(
-  dendextend::rotate,     # Protects your Ward clustering dendrograms
-  dendextend::labels,
-  cowplot::get_legend,    # Protects your publication figure grids
-  cowplot::get_title,
-  cowplot::align_plots,
-  cowplot::stamp,
-  patchwork::area
-)
-
-# --- 4. Quietly silence benign dataset/utility overlaps ---
-conflicts_prefer(
-  janitor::chisq.test,
-  janitor::fisher.test,
-  base::intersect,
-  base::setdiff,
-  .quiet = TRUE
-)
+  # --- 1. Core Data Wrangling (Always prefer Tidyverse) ---
+  conflicts_prefer(
+    dplyr::filter,
+    dplyr::select,
+    dplyr::lag,
+    dplyr::collapse,
+    dplyr::combine,
+    tidyr::expand,
+    tidyr::pack,
+    tidyr::unpack
+  )
+  
+  # --- 2. Statistical Modeling (Always prefer lmerTest & lme4) ---
+  conflicts_prefer(
+    lmerTest::lmer,
+    lmerTest::step,
+    lme4::lmList
+  )
+  
+  # --- 3. Visualization & Clustering (Tailored for Script 4 & 5) ---
+  conflicts_prefer(
+    dendextend::rotate,     # Protects your Ward clustering dendrograms
+    dendextend::labels,
+    cowplot::get_legend,    # Protects your publication figure grids
+    cowplot::get_title,
+    cowplot::align_plots,
+    cowplot::stamp,
+    patchwork::area
+  )
+  
+  # --- 4. Quietly silence benign dataset/utility overlaps ---
+  conflicts_prefer(
+    janitor::chisq.test,
+    janitor::fisher.test,
+    base::intersect,
+    base::setdiff,
+    base::print,
+    .quiet = TRUE
+  )
 }
 
 
@@ -79,7 +80,8 @@ get_grouping_vars <- function(config) {
   all_vars <- list(
     cfg_vars$primary_group_var,
     cfg_vars$secondary_group_var,
-    cfg_vars$optional_grouping_var
+    cfg_vars$optional_grouping_var,
+    cfg_vars$additional_grouping_var
   )
   
   valid_vars <- unique(unlist(all_vars))
@@ -1318,13 +1320,43 @@ run_statistical_model <- function(data_summary, config, response_variable) {
   get_variance_summary <- function(model_obj) {
     if (inherits(model_obj, "lmerMod")) {
       var_corr_df <- as.data.frame(lme4::VarCorr(model_obj))
-      total_var <- sum(var_corr_df$vcov, na.rm = TRUE)
+      
+      # 1. Calculate total variance ONLY from true variance rows (where var2 is NA)
+      true_variances <- var_corr_df %>% dplyr::filter(is.na(var2))
+      total_var <- sum(true_variances$vcov, na.rm = TRUE)
+      
+      # 2. Format the table with explicit labels and correct ICC calculation
       variance_summary_df <- var_corr_df %>%
-        dplyr::select(Source = grp, Variance = vcov, Std.Dev = sdcor) %>%
         dplyr::mutate(
-          ICC_Percent = (Variance / total_var) * 100,
-          Note = ifelse(Variance < 1e-8, "Boundary fit: Variance is effectively zero.", NA)
+          # Label the parameter accurately
+          Parameter_Type = dplyr::case_when(
+            is.na(var1) ~ "Residual Noise",
+            is.na(var2) & var1 == "(Intercept)" ~ "Random Intercept",
+            is.na(var2) & var1 != "(Intercept)" ~ paste("Random Slope:", var1),
+            !is.na(var2) ~ paste("Correlation:", var1, "~", var2),
+            TRUE ~ "Other"
+          ),
+          
+          # Only calculate ICC for true variance rows; set to NA for correlations/covariances
+          ICC_Percent = dplyr::if_else(is.na(var2), (vcov / total_var) * 100, NA_real_),
+          
+          # Clarify boundary fits
+          Note = dplyr::case_when(
+            !is.na(var2) & (sdcor == -1 | sdcor == 1) ~ "Boundary fit: Perfect correlation (slope var is likely 0)",
+            is.na(var2) & vcov < 1e-8 ~ "Boundary fit: Variance is effectively zero.",
+            TRUE ~ NA_character_
+          )
+        ) %>%
+        # Rename columns so correlation isn't mislabeled as Std.Dev
+        dplyr::select(
+          Source = grp,
+          Parameter_Type,
+          Variance_or_Covariance = vcov,
+          StdDev_or_Correlation = sdcor,
+          ICC_Percent,
+          Note
         )
+      
       return(variance_summary_df)
     }
     return(NULL) 
@@ -1603,7 +1635,7 @@ run_statistical_model <- function(data_summary, config, response_variable) {
                             "Action: Fit a standard Fixed-Effects Linear Model (LM).",
                             paste("Formula:", paste(deparse(model_formula_lm, width.cutoff = 500), collapse = " "))
     )
-
+    
     message("=== QC: Checking factor levels in model_data_base ===")
     
     for (col in names(model_data_base)) {
@@ -1651,7 +1683,7 @@ run_statistical_model <- function(data_summary, config, response_variable) {
       Decision = if (aic_unequal < (aic_equal - 2)) c("Runner-up", "Winner (Selected)") else c("Winner (Selected)", "Runner-up")
     )
     model_results[["Test_Round4_Variance_AIC"]] <- variance_test_df
-
+    
     if (aic_unequal < (aic_equal - 2)) {
       message(paste("...Result: Unequal Variance model wins! (AIC drop:", round(aic_equal - aic_unequal, 1), ")"))
       interpretation_log <- c(interpretation_log, "Result: Unequal Variance model (gls/lme) selected via AIC.")
@@ -2277,7 +2309,8 @@ validate_config <- function(config, check_external_files = FALSE) {
     key_vars$secondary_group_var,
     key_vars$optional_grouping_var,
     key_vars$repeated_measure_var,
-    key_vars$optional_crossed_effect
+    key_vars$optional_crossed_effect,
+    key_vars$additional_grouping_var
   ))
   grouping_pool <- grouping_pool[!is.null(grouping_pool) & grouping_pool != 'null']
   
