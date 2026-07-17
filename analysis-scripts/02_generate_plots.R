@@ -1126,11 +1126,26 @@ for (current_resp_var in response_vars) {
       subset_data <- loop_data %>%
         dplyr::filter(!!sym(primary_var) == c_geno, !!sym(cfg_vars$secondary_group_var) == c_clone)
       
-      if(is_crossed_model) {
-        subset_data <- subset_data %>% mutate(uid = as.factor(paste(!!sym(re_cross), !!sym(rep_var), sep="-")))
+      uid_vars <- if (is_crossed_model) {
+        c(re_cross, rep_var)
       } else {
-        subset_data <- subset_data %>% mutate(uid = as.factor(!!sym(rep_var)))
+        c(rep_var)
       }
+      
+      # Add additional grouping variable if present and not already used
+      add_var <- config$key_variables$additional_grouping_var
+      
+      if (!is.null(add_var) && !add_var %in% uid_vars) {
+        uid_vars <- c(add_var, uid_vars)
+      }
+      
+      subset_data <- subset_data %>%
+        mutate(
+          uid = do.call(
+            paste,
+            c(across(all_of(uid_vars)), sep = "-")
+          ) |> as.factor()
+        )
       
       p_val <- NA
       outlier_rep <- NA
@@ -1996,10 +2011,33 @@ for (current_resp_var in response_vars) {
   # PLOT 4: Individual Replicate Profiles 
   # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
   if (is_clone_style_analysis && !is.null(secondary_var) && secondary_var != 'null') {
-    plot_data <- summary_per_rep %>% mutate(facet_label = paste(!!sym(primary_var), !!sym(secondary_var), sep = " | ")) %>% 
-      arrange(!!sym(primary_var), clone_rank) %>% mutate(facet_label = factor(facet_label, levels = unique(.$facet_label)))
-    if(is_crossed_model) plot_data <- plot_data %>% mutate(uid = as.factor(paste(!!sym(re_cross), !!sym(rep_var), sep="-"))) else plot_data <- plot_data %>% 
-        mutate(uid = as.factor(!!sym(rep_var)))
+    
+    plot_data <- summary_per_rep %>% 
+      mutate(facet_label = paste(!!sym(primary_var), !!sym(secondary_var), sep = " | ")) %>% 
+      arrange(!!sym(primary_var), clone_rank) %>%
+      mutate(facet_label = factor(facet_label, levels = unique(.$facet_label)))
+    
+    uid_vars <- if (is_crossed_model) {
+      c(re_cross, rep_var)
+    } else {
+      c(rep_var)
+    }
+    
+    # Add additional grouping variable if present and not already used
+    add_var <- config$key_variables$additional_grouping_var
+    
+    if (!is.null(add_var) && !add_var %in% uid_vars) {
+      uid_vars <- c(add_var, uid_vars)
+    }
+    
+    plot_data <- plot_data %>%
+      mutate(
+        uid = do.call(
+          paste,
+          c(across(all_of(uid_vars)), sep = "-")
+        ) |> as.factor()
+      )
+        
     label_data <- plot_data %>% group_by(facet_label, uid) %>% dplyr::filter(!!sym(time_var) == max(!!sym(time_var), na.rm=TRUE)) %>% ungroup()
     
     qc_df <- model_outputs$results_tables$QC_Slope_Heterogeneity
@@ -2012,7 +2050,7 @@ for (current_resp_var in response_vars) {
         geom_hline(yintercept = 0, linetype = "dashed", colour = "grey50", linewidth = 0.5) } +
       geom_smooth(method = "lm", alpha = 0.12, se = TRUE, linewidth = 0.8) + 
       geom_point(mapping = create_plot_aes(aes(), re_cross), alpha = 0.7, size = 2) + 
-      ggrepel::geom_text_repel(data=label_data, aes(label=uid), size=2.5, nudge_x=5, direction="y", segment.size=0.2, show.legend=FALSE) + 
+      ggrepel::geom_text_repel(data=label_data, aes(label=uid), size=2.5, nudge_x=5, direction="both", max.overlaps = Inf, min.segment.length = 0, segment.size=0.2, show.legend=FALSE) + 
       geom_text(data=stat_labels, aes(label=final_label, color=I(text_color), group=facet_label), x=-Inf, y=Inf, hjust=-0.1, vjust=1.2, inherit.aes=FALSE, size=2.8, fontface="bold") + 
       facet_wrap(vars(facet_label), scales="fixed", axes="all") + 
       scale_x_continuous(breaks = as.numeric(x_breaks), expand = expansion(mult = c(0.05, 0.25))) + 
@@ -2022,9 +2060,9 @@ for (current_resp_var in response_vars) {
            y = y_axis_label,
            color = "Replicate",
            fill  = "Replicate",
-           shape = if (is_crossed_model) "Batch" else NULL
+           shape = if (is_crossed_model %||% !is.null(add_var)) "Batch" else NULL
       ) +
-      { if(is_crossed_model) labs(shape = "Batch") } + 
+      { if(is_crossed_model %||% !is.null(add_var)) labs(shape = "Batch") } + 
       theme_publication(base_size = 12) + 
       theme(legend.position = "none", strip.text = element_text(size = rel(0.7), face="bold"))
     

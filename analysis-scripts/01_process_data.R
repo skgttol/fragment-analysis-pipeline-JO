@@ -762,7 +762,6 @@ label_lookup <- genotype_map %>%
   dplyr::distinct()
 
 # --- Save Final Environment ---
-rm(latest_analysis_dir)
 rdata_path <- file.path(output_dir, "processing_complete.RData")
 save.image(file = rdata_path) 
 log_print(paste("R environment saved to:", rdata_path))
@@ -771,3 +770,4 @@ log_print("This file is required for 02_generate_plots.R")
 # --- Finalize ---
 log_print("\n--- SCRIPT 01: DATA PROCESSING FINISHED SUCCESSFULLY ---", console = TRUE)
 log_close()
+
