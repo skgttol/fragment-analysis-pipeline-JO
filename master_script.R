@@ -13,7 +13,7 @@ if (!file.exists(here::here("config.yml"))) {
   stop("❌ CRITICAL ERROR: 'config.yml' not found. Please ensure your working directory is set correctly.")
 }
 
-FORCE_UPDATE_SCRIPTS <- TRUE
+FORCE_UPDATE_SCRIPTS <- FALSE
 # --- GITHUB REPOSITORY SETTINGS ---
 # Replace 'YOUR_USERNAME' and 'YOUR_REPO' with your actual GitHub details.
 # Ensure the branch name ('main' or 'master') is correct.
@@ -107,7 +107,7 @@ run_local_script <- function(script_name) {
 # =============================================================================
 
 # [Setup] Usually run only once per project to generate the initial settings
-RUN_00_SETTINGS    <- TRUE  
+RUN_00_SETTINGS    <- FALSE  
 
 # [Core Pipeline]
 RUN_01_PROCESS     <- TRUE   # Data Processing & QC
