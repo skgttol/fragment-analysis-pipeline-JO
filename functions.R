@@ -19,45 +19,45 @@ setup_environment <- function() {
   # This locks them in so your data wrangling never crashes.
   if (!requireNamespace("conflicted", quietly = TRUE)) install.packages("conflicted")
   library(conflicted)
-  # --- 1. Core Data Wrangling (Always prefer Tidyverse) ---
-  conflicts_prefer(
-    dplyr::filter,
-    dplyr::select,
-    dplyr::lag,
-    dplyr::collapse,
-    dplyr::combine,
-    tidyr::expand,
-    tidyr::pack,
-    tidyr::unpack
-  )
-  
-  # --- 2. Statistical Modeling (Always prefer lmerTest & lme4) ---
-  conflicts_prefer(
-    lmerTest::lmer,
-    lmerTest::step,
-    lme4::lmList
-  )
-  
-  # --- 3. Visualization & Clustering (Tailored for Script 4 & 5) ---
-  conflicts_prefer(
-    dendextend::rotate,     # Protects your Ward clustering dendrograms
-    dendextend::labels,
-    cowplot::get_legend,    # Protects your publication figure grids
-    cowplot::get_title,
-    cowplot::align_plots,
-    cowplot::stamp,
-    patchwork::area
-  )
-  
-  # --- 4. Quietly silence benign dataset/utility overlaps ---
-  conflicts_prefer(
-    janitor::chisq.test,
-    janitor::fisher.test,
-    base::intersect,
-    base::setdiff,
-    base::print,
-    .quiet = TRUE
-  )
+# --- 1. Core Data Wrangling (Always prefer Tidyverse) ---
+conflicts_prefer(
+  dplyr::filter,
+  dplyr::select,
+  dplyr::lag,
+  dplyr::collapse,
+  dplyr::combine,
+  tidyr::expand,
+  tidyr::pack,
+  tidyr::unpack
+)
+
+# --- 2. Statistical Modeling (Always prefer lmerTest & lme4) ---
+conflicts_prefer(
+  lmerTest::lmer,
+  lmerTest::step,
+  lme4::lmList
+)
+
+# --- 3. Visualization & Clustering (Tailored for Script 4 & 5) ---
+conflicts_prefer(
+  dendextend::rotate,     # Protects your Ward clustering dendrograms
+  dendextend::labels,
+  cowplot::get_legend,    # Protects your publication figure grids
+  cowplot::get_title,
+  cowplot::align_plots,
+  cowplot::stamp,
+  patchwork::area
+)
+
+# --- 4. Quietly silence benign dataset/utility overlaps ---
+conflicts_prefer(
+  janitor::chisq.test,
+  janitor::fisher.test,
+  base::intersect,
+  base::setdiff,
+  base::print,
+  .quiet = TRUE
+)
 }
 
 
@@ -1635,7 +1635,7 @@ run_statistical_model <- function(data_summary, config, response_variable) {
                             "Action: Fit a standard Fixed-Effects Linear Model (LM).",
                             paste("Formula:", paste(deparse(model_formula_lm, width.cutoff = 500), collapse = " "))
     )
-    
+
     message("=== QC: Checking factor levels in model_data_base ===")
     
     for (col in names(model_data_base)) {
@@ -1683,7 +1683,7 @@ run_statistical_model <- function(data_summary, config, response_variable) {
       Decision = if (aic_unequal < (aic_equal - 2)) c("Runner-up", "Winner (Selected)") else c("Winner (Selected)", "Runner-up")
     )
     model_results[["Test_Round4_Variance_AIC"]] <- variance_test_df
-    
+
     if (aic_unequal < (aic_equal - 2)) {
       message(paste("...Result: Unequal Variance model wins! (AIC drop:", round(aic_equal - aic_unequal, 1), ")"))
       interpretation_log <- c(interpretation_log, "Result: Unequal Variance model (gls/lme) selected via AIC.")
