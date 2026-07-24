@@ -4,7 +4,7 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
 
 #=============================================================================#
-# PART 0: SETUP & PATHS
+# PART 0: SETUP & PATHS ####
 #=============================================================================#
 # Packages
 packages <- c("tidyverse", "here", "yaml", "ggridges", "cowplot", "logr", "magick", "grid", "data.table", "writexl", "ggh4x")
@@ -89,7 +89,7 @@ get_lbl <- function(style = "auto") {
 }
 
 #=============================================================================#
-# PART 1: LOAD & OPTIMIZE RAW DATA
+# PART 1: LOAD & OPTIMIZE RAW DATA ####
 #=============================================================================#
 logr::log_print("Loading and Optimizing Data...", console=TRUE)
 
@@ -146,7 +146,7 @@ logr::log_print("Data optimized.", console=TRUE)
 
 
 #=============================================================================#
-# PART 2: METADATA MERGE & FACTOR ORDERING
+# PART 2: METADATA MERGE & FACTOR ORDERING ####
 #=============================================================================#
 cols_to_keep <- c("fsa_filename", 
                   "pcr", "rep",
@@ -276,7 +276,7 @@ baseline_table <- peaks_annotated %>%
 
 
 #=============================================================================#
-# PART 3: PDF REPORTS (Organized & Vectorized with facet_grid)
+# PART 3: PDF REPORTS (Organized & Vectorized with facet_grid) ####
 #=============================================================================#
 logr::log_print("Generating PDF Reports...", console=TRUE)
 
@@ -560,7 +560,7 @@ for (geno in unique_genos) {
 
 
 #=============================================================================#
-# PART 4: PUBLICATION FIGURES
+# PART 4: PUBLICATION FIGURES ####
 #=============================================================================#
 try({ while(!is.null(dev.list())) dev.off() }, silent=TRUE)
 logr::log_print("Generating Publication Figures (TIFFs)...", console=TRUE)
@@ -797,7 +797,7 @@ if(nrow(unaligned_data) > 0) {
 }
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
-# PLOT 4F: GENOTYPE BASELINE OVERVIEW (Replicates & Averages)
+# PLOT 4F: GENOTYPE BASELINE OVERVIEW (Replicates & Averages) ####
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
 logr::log_print("  -> Generating Genotype Baseline Overview Plots...", console=TRUE)
 
@@ -842,7 +842,7 @@ overlay_theme <- theme_cowplot() +
   )
 
 # =========================================================================== #
-# PHASE 0A: GROUP AVERAGE PLOT (Mean Trace per Genotype)
+## PHASE 0A: GROUP AVERAGE PLOT (Mean Trace per Genotype) ####
 # =========================================================================== #
 baseline_full_data <- plot_data_full %>%
   dplyr::filter(!!sym(time_var) == min(!!sym(time_var), na.rm = TRUE))
@@ -866,9 +866,8 @@ if(nrow(baseline_full_data) > 0) {
 }
 
 # =========================================================================== #
-# PHASE 0B: SINGLE REPLICATE SELECTION LOGIC
+## PHASE 0B: SINGLE REPLICATE SELECTION LOGIC (Euclidean Mode Distance by PCR) ####
 # =========================================================================== #
-target_rep_id <- "1" 
 files_with_trace_data <- unique(optimized_data$fsa_filename)
 override_file_path <- file.path(analysis_base_dir, "representative_traces.csv")
 
@@ -879,44 +878,132 @@ if (file.exists(override_file_path)) {
     dplyr::filter(!is_excluded, fsa_filename %in% files_with_trace_data) %>%
     semi_join(manual_selection, by = intersect(colnames(manual_selection), colnames(peaks_annotated)))
 } else {
-  logr::log_print("Auto-selecting 1st clone and target replicate for overview plots...", console=TRUE)
+  logr::log_print("Auto-selecting representative trace by minimizing distance to Raw Mode Start/End across all PCRs...", console=TRUE)
+  
   valid_meta <- peaks_annotated %>%
-    dplyr::filter(!is_excluded, fsa_filename %in% files_with_trace_data, !is.na(!!sym(primary_var)), !is.na(!!sym(clone_var)), !is.na(mode), !is.na(instability_index)) %>%
+    dplyr::filter(!is_excluded, fsa_filename %in% files_with_trace_data, !is.na(!!sym(primary_var)), !is.na(mode)) %>%
     dplyr::mutate(!!sym(time_var) := as.numeric(as.character(!!sym(time_var))))
   
-  complete_bioreps <- valid_meta %>%
+  # 1. Strictly enforce complete Start/End pairs per individual (bio_rep_id + pcr) combination
+  complete_pairs <- valid_meta %>%
     group_by(bio_id) %>%
     dplyr::mutate(
-      geno_min_time = min(!!sym(time_var), na.rm = TRUE), 
-      geno_max_time = max(!!sym(time_var), na.rm = TRUE)) %>%
-    group_by(bio_rep_id) %>%
-    dplyr::filter(any(!!sym(time_var) == geno_min_time) & any(!!sym(time_var) == geno_max_time) & geno_min_time != geno_max_time) %>%
-    pull(bio_rep_id) %>% unique()
+      line_min_time = min(!!sym(time_var), na.rm = TRUE), 
+      line_max_time = max(!!sym(time_var), na.rm = TRUE)
+    ) %>%
+    group_by(bio_rep_id, pcr) %>% # <-- ADDED PCR TO GROUPING
+    dplyr::filter(
+      any(!!sym(time_var) == line_min_time, na.rm = TRUE) & 
+        any(!!sym(time_var) == line_max_time, na.rm = TRUE) &
+        line_min_time != line_max_time
+    ) %>%
+    dplyr::select(bio_rep_id, pcr) %>% 
+    unique()
   
+  # 2. Extract actual Start and End modes for EVERY candidate PCR replicate
+  rep_actuals <- valid_meta %>%
+    dplyr::semi_join(complete_pairs, by = c("bio_rep_id", "pcr")) %>%
+    group_by(bio_rep_id, pcr, !!sym(primary_var), !!sym(clone_var), !!sym(rep_var)) %>%
+    dplyr::summarise(
+      Actual_Start = mode[which.min(!!sym(time_var))],
+      Actual_End   = mode[which.max(!!sym(time_var))],
+      .groups = "drop"
+    )
+  
+  # 3. Get target group averages (Use external table if provided, or compute dynamically from all PCRs)
+  if (exists("summary_mode_targets") && is.data.frame(summary_mode_targets)) {
+    target_modes <- summary_mode_targets %>%
+      dplyr::select(!!sym(primary_var) := genotype, Target_Start = Raw_Mode_Start, Target_End = Raw_Mode_End)
+  } else {
+    target_modes <- rep_actuals %>%
+      group_by(!!sym(primary_var)) %>%
+      dplyr::summarise(
+        Target_Start = mean(Actual_Start, na.rm = TRUE),
+        Target_End   = mean(Actual_End, na.rm = TRUE),
+        .groups = "drop"
+      )
+  }
+  
+  # 4. Calculate Euclidean Distance across all PCR candidates and rank them
+  ranked_candidates <- rep_actuals %>%
+    dplyr::left_join(target_modes, by = primary_var) %>%
+    dplyr::mutate(
+      Distance_Score = sqrt((Actual_Start - Target_Start)^2 + (Actual_End - Target_End)^2)
+    ) %>%
+    group_by(!!sym(primary_var)) %>%
+    # Sort by closest distance; tie-break by Replicate ID, then by PCR number
+    dplyr::arrange(Distance_Score, as.numeric(as.character(!!sym(rep_var))), as.numeric(as.character(pcr))) %>%
+    dplyr::mutate(Rank = row_number()) %>%
+    ungroup()
+  
+  # 5. Log the winners (now including the winning PCR number!)
+  winners <- ranked_candidates %>% dplyr::filter(Rank == 1)
+  for(i in 1:nrow(winners)) {
+    msg <- sprintf("  -> %s | Selected Rep %s (PCR %s, Clone: %s) | Distance Score: %.3f (Start: %.1f vs %.1f, End: %.1f vs %.1f)",
+                   winners[[primary_var]][i], winners[[rep_var]][i], winners$pcr[i], winners[[clone_var]][i],
+                   winners$Distance_Score[i], winners$Actual_Start[i], winners$Target_Start[i],
+                   winners$Actual_End[i], winners$Target_End[i])
+    logr::log_print(msg, console = TRUE)
+  }
+  
+  # 6. Filter metadata to ONLY include the Start and End rows of the specific winning (bio_rep_id + pcr)
   selected_meta <- valid_meta %>%
-    dplyr::filter(bio_rep_id %in% complete_bioreps) %>%
-    group_by(!!sym(primary_var), !!sym(clone_var)) %>% 
-    mutate(max_time_for_this_clone = max(!!sym(time_var), na.rm = FALSE)) %>%
-    mutate(min_time_for_this_clone = min(!!sym(time_var), na.rm = TRUE)) %>%
-    group_by(!!sym(primary_var)) %>% 
-    arrange(min_time_for_this_clone !=0, min_time_for_this_clone, desc(max_time_for_this_clone), !!sym(clone_var), as.numeric(as.character(!!sym(rep_var)))) %>%
-    dplyr::filter(!!sym(clone_var) == dplyr::first(!!sym(clone_var))) %>%
-    dplyr::filter(if(any(!!sym(rep_var) == target_rep_id)) !!sym(rep_var) == target_rep_id else !!sym(rep_var) == dplyr::first(!!sym(rep_var))) %>%
-    slice(1) %>% ungroup()
+    dplyr::semi_join(winners %>% dplyr::select(bio_rep_id, pcr), by = c("bio_rep_id", "pcr")) %>%
+    group_by(bio_rep_id, pcr) %>%
+    dplyr::filter(
+      !!sym(time_var) == min(!!sym(time_var), na.rm = TRUE) | 
+        !!sym(time_var) == max(!!sym(time_var), na.rm = TRUE)
+    ) %>%
+    dplyr::mutate(
+      Timepoint_Label = dplyr::if_else(!!sym(time_var) == min(!!sym(time_var), na.rm = TRUE), "Start", "End")
+    ) %>%
+    ungroup()
 }
 
-target_bioreps <- unique(selected_meta$bio_rep_id)
+# 7. Extract the exact winning FSA filenames to pull the clean traces downstream
+target_files <- unique(selected_meta$fsa_filename)
 
 plot_data_reps <- optimized_data %>%
   left_join(peaks_annotated, by = "fsa_filename") %>%
-  dplyr::filter(bio_rep_id %in% target_bioreps & !is_excluded) %>%
-  dplyr::group_by(bio_rep_id) %>%
-  dplyr::filter(pcr == min(pcr, na.rm = TRUE)) %>%
-  dplyr::ungroup() %>%
-  dplyr::mutate(Display_Label = paste(!!sym(pub_label_col), "|", !!sym(clone_var))) 
+  dplyr::filter(fsa_filename %in% target_files & !is_excluded) %>%
+  # Notice: No more arbitrary pcr == min(pcr) filter needed here! The tournament picked the exact file.
+  dplyr::mutate(Display_Label = paste(!!sym(pub_label_col), "|", !!sym(clone_var)))
 
 # =========================================================================== #
-# PHASE 1: DATA PREP - BASELINE SPLIT (WT vs Expanded)
+# --- 7. EXPORT SELECTED REPRESENTATIVE TRACE METADATA TO EXCEL ---
+# =========================================================================== #
+logr::log_print("  -> Exporting selected Start and End trace metadata to Excel...", console=TRUE)
+
+# Select relevant columns, leading with the new Timepoint_Label
+export_cols <- intersect(
+  c("Timepoint_Label", primary_var, clone_var, rep_var, time_var, "fsa_filename", "mode", "instability_index", "bio_rep_id"),
+  colnames(selected_meta)
+)
+
+rep_export_df <- selected_meta %>%
+  dplyr::select(dplyr::all_of(export_cols)) %>%
+  dplyr::arrange(!!sym(primary_var), !!sym(clone_var), as.numeric(as.character(!!sym(time_var))))
+
+# Attach distance scores and target modes from the tournament winners
+if (exists("winners") && is.data.frame(winners)) {
+  rep_export_df <- rep_export_df %>%
+    dplyr::left_join(
+      winners %>% dplyr::select(bio_rep_id, Distance_Score, Target_Start, Target_End),
+      by = "bio_rep_id"
+    ) %>%
+    dplyr::mutate(dplyr::across(where(is.numeric), ~ round(.x, 4)))
+}
+
+# Print summary table to R console for immediate viewing
+print(rep_export_df)
+
+# Save to nested Excel folder
+export_excel_path <- file.path(overview_dir, "Representative_Traces_Selected.xlsx")
+openxlsx::write.xlsx(rep_export_df, file = export_excel_path, asTable = TRUE, overwrite = TRUE)
+logr::log_print(paste("  -> Successfully saved representative trace file list to:", export_excel_path), console=TRUE)
+
+# =========================================================================== #
+## PHASE 1: DATA PREP - BASELINE SPLIT (WT vs Expanded) ####
 # =========================================================================== #
 if(nrow(plot_data_reps) > 0) {
   baseline_rep_data <- plot_data_reps %>% 
@@ -959,7 +1046,7 @@ if(nrow(plot_data_reps) > 0) {
     mutate(Display_Label = factor(Display_Label, levels = unique(as.character(Display_Label))))
   
   # =========================================================================== #
-  # PHASE 2: PLOTTING - BASELINE SPLIT
+  ## PHASE 2: PLOTTING - BASELINE SPLIT ####
   # =========================================================================== #
   if(nrow(baseline_split_smooth) > 0) {
     # --- 2A: Generate Smoothed Baseline Grid ---
@@ -971,7 +1058,7 @@ if(nrow(plot_data_reps) > 0) {
       scale_fill_manual(values = unname(create_custom_palette(baseline_split_smooth, config, pub_label_col))) +
       labs(title = NULL, x = NULL, y = "Normalized Intensity") + common_theme + guides(fill = "none") + theme(plot.margin = margin(r = 5))
     
-    p_exp_sm <- ggplot(baseline_split_smooth %>% filter(Panel_Region == "Expanded Allele"), aes(x = CAG, y = Norm_Height)) +
+    p_exp_sm <- ggplot(baseline_split_smooth %>% dplyr::filter(Panel_Region == "Expanded Allele"), aes(x = CAG, y = Norm_Height)) +
       geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
       facet_grid(rows = vars(Display_Label)) + 
       scale_x_continuous(limits = exp_lims, breaks = seq(0, 1000, by = 20)) +
@@ -986,7 +1073,7 @@ if(nrow(plot_data_reps) > 0) {
     ggsave(file.path(overview_dir, "Genotype_SingleRep_Smoothed.tiff"), final_sm, width = 8, height = 10, compression = "lzw")
     
     # --- 2B: Generate Jagged Baseline Grid ---
-    p_wt_jg <- ggplot(baseline_split_jagged %>% filter(Panel_Region == "WT Allele"), aes(x = CAG, y = Norm_Height)) +
+    p_wt_jg <- ggplot(baseline_split_jagged %>% dplyr::filter(Panel_Region == "WT Allele"), aes(x = CAG, y = Norm_Height)) +
       geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
       facet_grid(rows = vars(Display_Label), switch = "y") +
       scale_x_continuous(limits = wt_lims, breaks = seq(0, 100, by = 5)) +
@@ -994,7 +1081,7 @@ if(nrow(plot_data_reps) > 0) {
       scale_fill_manual(values = unname(create_custom_palette(baseline_split_jagged, config, pub_label_col))) +
       labs(title = NULL, x = NULL, y = "Normalized Intensity") + common_theme + guides(fill = "none") + theme(plot.margin = margin(r = 5))
     
-    p_exp_jg <- ggplot(baseline_split_jagged %>% filter(Panel_Region == "Expanded Allele"), aes(x = CAG, y = Norm_Height)) +
+    p_exp_jg <- ggplot(baseline_split_jagged %>% dplyr::filter(Panel_Region == "Expanded Allele"), aes(x = CAG, y = Norm_Height)) +
       geom_area(aes(fill = !!sym(pub_label_col)), alpha = 0.4) + geom_line(color = "black", linewidth = 0.3) +
       facet_grid(rows = vars(Display_Label)) + 
       scale_x_continuous(limits = exp_lims, breaks = seq(0, 1000, by = 20)) +
@@ -1010,7 +1097,7 @@ if(nrow(plot_data_reps) > 0) {
   }
   
   # =========================================================================== #
-  # PHASE 3: DATA PREP - START VS END OVERLAY
+  ## PHASE 3: DATA PREP - START VS END OVERLAY ####
   # =========================================================================== #
   logr::log_print("  -> Generating Start vs End Representative Overlay...", console=TRUE)
   
@@ -1057,7 +1144,7 @@ if(nrow(plot_data_reps) > 0) {
     mutate(Display_Label = factor(Display_Label, levels = unique(as.character(Display_Label))))
   
   # =========================================================================== #
-  # PHASE 4: PLOTTING - START VS END OVERLAY (Absolute & Aligned)
+  ## PHASE 4: PLOTTING - START VS END OVERLAY (Absolute & Aligned) ####
   # =========================================================================== #
   if(nrow(smooth_overlay_data) > 0) {
     
@@ -1160,14 +1247,13 @@ if(nrow(plot_data_reps) > 0) {
 }
 
 #=============================================================================#
-# PART 5: EXCEL DATA EXPORT & SUMMARY PLOT (With Raw Comparisons)
+# PART 5: EXCEL DATA EXPORT & SUMMARY PLOT (With Raw Comparisons) ####
 #=============================================================================#
 logr::log_print("Generating Summary Excel Export & Peak Plot...", console=TRUE)
 
 if(exists("aligned_data") && nrow(aligned_data) > 0) {
   
   # 1. Calculate Raw Modes (Average of GeneMapper Modes) for Comparison
-  # -------------------------------------------------------------------------
   # This gets the actual numeric average of the replicates, not the peak of the trace
   raw_modes_wide <- peaks_annotated %>%
     dplyr::filter(!is_excluded) %>%
@@ -1187,7 +1273,6 @@ if(exists("aligned_data") && nrow(aligned_data) > 0) {
     tidyr::pivot_wider(names_from = Timepoint_Label, values_from = Raw_Mean_Mode, names_prefix = "Raw_Mode_")
   
   # 2. Generate Summary Export Table (Merged)
-  # -------------------------------------------------------------------------
   summary_export_df <- aligned_data %>%
     group_by(!!sym(config$key_variables$primary_group_var), Timepoint_Label) %>%
     summarise(
@@ -1219,7 +1304,6 @@ if(exists("aligned_data") && nrow(aligned_data) > 0) {
     )
   
   # 3. Export to Excel
-  # -------------------------------------------------------------------------
   xlsx_path <- file.path(excel_dir, "Summary_Data_Aligned_Peaks.xlsx")
   tryCatch({
     writexl::write_xlsx(summary_export_df, xlsx_path)
@@ -1229,7 +1313,6 @@ if(exists("aligned_data") && nrow(aligned_data) > 0) {
   })
   
   # 4. Generate Summary Peak Plot (Visualizing the Shift)
-  # -------------------------------------------------------------------------
   # We need a long format version just for plotting the "Plotted" peaks
   summary_long_for_plot <- aligned_data %>%
     group_by(!!sym(config$key_variables$primary_group_var), Timepoint_Label) %>%
